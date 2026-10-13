@@ -1,0 +1,25 @@
+[Unit]
+Description=Cloudflare HTTPS relay and IP selection daemon
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=cfipd
+Group=cfipd
+ExecStart=/usr/bin/cfipd run -config /etc/cfipd.json
+WorkingDirectory=/var/lib/cfipd
+StateDirectory=cfipd
+StateDirectoryMode=0750
+RuntimeDirectory=cfipd
+RuntimeDirectoryMode=0750
+UMask=0007
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

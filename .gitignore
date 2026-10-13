@@ -1,0 +1,6 @@
+/cfipd
+/cfipd.json
+/state.json
+/state.json.tmp
+/history*.jsonl
+/dist/

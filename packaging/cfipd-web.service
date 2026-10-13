@@ -1,0 +1,19 @@
+[Unit]
+Description=Read-only cfipd web dashboard
+Requires=cfipd.service
+After=cfipd.service
+
+[Service]
+User=cfipd
+Group=cfipd
+ExecStart=/usr/bin/cfipd web -config /etc/cfipd.json -listen 127.0.0.1:8080
+Restart=on-failure
+RestartSec=5s
+UMask=0007
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

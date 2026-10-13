@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+if [ "$1" = configure ]; then
+    if ! getent passwd cfipd >/dev/null; then
+        adduser --system --group --home /var/lib/cfipd --no-create-home cfipd
+    fi
+    deb-systemd-helper unmask cfipd.service cfipd-web.service >/dev/null || true
+    if deb-systemd-helper --quiet was-enabled cfipd.service; then
+        deb-systemd-helper enable cfipd.service >/dev/null || true
+    else
+        deb-systemd-helper update-state cfipd.service >/dev/null || true
+    fi
+    deb-systemd-helper update-state cfipd-web.service >/dev/null || true
+    if [ -d /run/systemd/system ]; then
+        systemctl --system daemon-reload >/dev/null || true
+        deb-systemd-invoke restart cfipd.service cfipd-web.service >/dev/null || true
+    fi
+fi

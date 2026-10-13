@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+case "$1" in
+    remove) deb-systemd-helper mask cfipd.service cfipd-web.service >/dev/null || true ;;
+    purge) deb-systemd-helper purge cfipd.service cfipd-web.service >/dev/null || true
+           deb-systemd-helper unmask cfipd.service cfipd-web.service >/dev/null || true ;;
+esac
+if [ -d /run/systemd/system ]; then
+    systemctl --system daemon-reload >/dev/null || true
+fi
+# Keep learned state and the service account, including on purge.
