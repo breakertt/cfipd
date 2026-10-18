@@ -194,8 +194,8 @@ new HTTPS connections; established sessions keep their existing upstream.
 
 - `state.json` stores endpoint pools, prefix feedback, schedules, and PK budgets.
   `history.jsonl` records probes and events; segments rotate at approximately
-  64 MiB and only the newest three archives are kept, so history stays under
-  about 256 MiB. Each pruned archive is logged.
+  8 MiB and only the newest three archives are kept, so history stays under
+  about 32 MiB. Each pruned archive is logged.
 - Measurements describe the daemon machine's route to the configured probe
   hostname. After changing networks, preserve the old state and start fresh
   learning. There is no city or ISP-specific binding.

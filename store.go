@@ -16,7 +16,7 @@ import (
 // rotated segments, so history uses at most about (histKeep+1)*histRotateSize
 // on disk. Rotation prunes the oldest archives beyond histKeep and logs each.
 const (
-	histRotateSize = 64 << 20
+	histRotateSize = 8 << 20
 	histKeep       = 3
 )
 
@@ -86,7 +86,8 @@ func rotateFile(dir, p string) error {
 }
 
 // pruneArchives removes rotated segments beyond the newest histKeep. Archive
-// names embed the rotation time, so lexical order is age order.
+// names start with the rotation time, so lexical order is age order to the
+// second.
 func pruneArchives(dir string) {
 	old, err := filepath.Glob(filepath.Join(dir, "history-*.jsonl"))
 	if err != nil || len(old) <= histKeep {
