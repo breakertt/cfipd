@@ -111,14 +111,16 @@ func TestPickUsesCanonicalStats(t *testing.T) {
 	cfg.ScanV6Ratio = 0
 	s := NewScanner(cfg, func(string) bool { return false }, func() float64 { return 200 })
 	s.rnd = rand.New(rand.NewSource(1))
+	// pick() ages stats against the wall clock, so a fixed t0 goes stale.
+	now := time.Now()
 	// Record two good probes on 108.162.198.93 -> its /24 becomes "good".
-	s.Record("108.162.198.93", okProbe(150, "NRT"), t0)
-	s.Record("108.162.198.93", okProbe(160, "NRT"), t0)
+	s.Record("108.162.198.93", okProbe(150, "NRT"), now)
+	s.Record("108.162.198.93", okProbe(160, "NRT"), now)
 	// Make every other prefix bad so roll<0.6 must land on the good one.
 	for _, base := range s.prefixes {
 		if s.statV4(base) == nil {
 			s.stats[blockKeyV4([4]byte{byte(base >> 24), byte(base >> 16), byte(base >> 8), 0})] =
-				&PrefixStat{Probes: 5, OK: 0, LastProbe: t0}
+				&PrefixStat{Probes: 5, OK: 0, LastProbe: now}
 		}
 	}
 	hit := false
