@@ -780,3 +780,34 @@ func TestHistoryRotationPreserves(t *testing.T) {
 		t.Fatalf("both archives must be preserved, found %d", n)
 	}
 }
+
+// TestHistoryRotationPrunesOldest: rotation keeps only the newest histKeep
+// archives. The archive files are fixtures, not production history.
+func TestHistoryRotationPrunesOldest(t *testing.T) {
+	dir := t.TempDir()
+	var fixtures []string
+	for i := range histKeep + 1 {
+		f := filepath.Join(dir, fmt.Sprintf("history-2000010%d-000000.jsonl", i+1))
+		if err := os.WriteFile(f, []byte("fixture\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		fixtures = append(fixtures, f)
+	}
+	p := filepath.Join(dir, "history.jsonl")
+	if err := os.WriteFile(p, []byte("fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := rotateFile(dir, p); err != nil {
+		t.Fatal(err)
+	}
+	left, _ := filepath.Glob(filepath.Join(dir, "history-*.jsonl"))
+	if len(left) != histKeep {
+		t.Fatalf("want %d archives after pruning, found %d", histKeep, len(left))
+	}
+	for i, f := range fixtures {
+		_, err := os.Stat(f)
+		if pruned := os.IsNotExist(err); pruned != (i < 2) {
+			t.Fatalf("archive %s: pruned=%v, want only the two oldest pruned", filepath.Base(f), pruned)
+		}
+	}
+}

@@ -12,9 +12,13 @@ import (
 	"time"
 )
 
-// histRotateSize bounds each history.jsonl segment. Rotation renames the old
-// segment aside (never deletes); pruning rotated files is an operator policy.
-const histRotateSize = 64 << 20
+// histRotateSize bounds each history.jsonl segment and histKeep the number of
+// rotated segments, so history uses at most about (histKeep+1)*histRotateSize
+// on disk. Rotation prunes the oldest archives beyond histKeep and logs each.
+const (
+	histRotateSize = 64 << 20
+	histKeep       = 3
+)
 
 type Store struct {
 	dir    string
@@ -60,7 +64,7 @@ func OpenStore(dir string) (*Store, error) {
 	return s, nil
 }
 
-// rotateFile renames p aside with a unique name; nothing is ever deleted.
+// rotateFile renames p aside under a unique name, then prunes old archives.
 func rotateFile(dir, p string) error {
 	for i := range 100 {
 		name := "history-" + time.Now().Format("20060102-150405") + ".jsonl"
@@ -74,10 +78,28 @@ func rotateFile(dir, p string) error {
 		if err := os.Rename(p, dst); err != nil {
 			return err
 		}
-		log.Printf("history rotated to %s (kept; total archive retention needs an operator policy)", dst)
+		log.Printf("history rotated to %s", dst)
+		pruneArchives(dir)
 		return nil
 	}
 	return fmt.Errorf("no free archive name")
+}
+
+// pruneArchives removes rotated segments beyond the newest histKeep. Archive
+// names embed the rotation time, so lexical order is age order.
+func pruneArchives(dir string) {
+	old, err := filepath.Glob(filepath.Join(dir, "history-*.jsonl"))
+	if err != nil || len(old) <= histKeep {
+		return
+	}
+	sort.Strings(old)
+	for _, p := range old[:len(old)-histKeep] {
+		if err := os.Remove(p); err != nil {
+			log.Printf("history prune: %v", err)
+			continue
+		}
+		log.Printf("history pruned %s (keeping newest %d archives)", p, histKeep)
+	}
 }
 
 func (s *Store) Load(pool *Pool, scan *Scanner) error {
@@ -220,8 +242,9 @@ func (s *Store) Save(pool *Pool, scan *Scanner) error {
 }
 
 // Log appends one JSON line to history.jsonl. Called only from the event loop.
-// Oversized segments rotate aside; nothing is deleted. Rotation failures are
-// reported and logging continues on the current handle, never silently lost.
+// Oversized segments rotate aside and archives beyond histKeep are pruned.
+// Rotation failures are reported and logging continues on the current handle,
+// never silently lost.
 func (s *Store) Log(v any) {
 	b, err := json.Marshal(v)
 	if err != nil {
