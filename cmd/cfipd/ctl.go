@@ -32,26 +32,24 @@ func serveCtl(d *daemon) error {
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", d.cfg.Socket, err)
 	}
-	mux := http.NewServeMux()
-	for _, p := range []string{"/status", "/actives", "/standbys", "/candidates", "/prefixes", "/promote", "/quarantine", "/scan", "/relay", "/add"} {
-		mux.HandleFunc(p, func(w http.ResponseWriter, r *http.Request) {
-			req := ctlRequest{path: r.URL.Path, arg: r.URL.Query().Get("ip"), reply: make(chan ctlReply, 1)}
-			select {
-			case d.ctl <- req:
-			case <-d.ctx.Done():
-				http.Error(w, "daemon shutting down", http.StatusServiceUnavailable)
-				return
-			}
-			rep := <-req.reply
-			if rep.err != "" {
-				http.Error(w, rep.err, http.StatusBadRequest)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(rep.v)
-		})
-	}
-	srv := &http.Server{Handler: mux}
+	// Every path goes to the event loop; handleCtl is the one list of paths.
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		req := ctlRequest{path: r.URL.Path, arg: r.URL.Query().Get("ip"), reply: make(chan ctlReply, 1)}
+		select {
+		case d.ctl <- req:
+		case <-d.ctx.Done():
+			http.Error(w, "daemon shutting down", http.StatusServiceUnavailable)
+			return
+		}
+		rep := <-req.reply
+		if rep.err != "" {
+			http.Error(w, rep.err, http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(rep.v)
+	})
+	srv := &http.Server{Handler: handler}
 	go srv.Serve(ln)
 	go func() { <-d.ctx.Done(); srv.Close() }()
 	return nil
