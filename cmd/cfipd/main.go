@@ -120,12 +120,16 @@ func main() {
 			log.Fatalf("run: %v", err)
 		}
 
-	case "status", "actives", "standbys", "candidates", "prefixes", "scan", "relay":
+	case "status", "actives", "standbys", "candidates", "prefixes", "scan", "relay", "clients":
 		ctlPrint(cfg.Socket, "/"+os.Args[1], "")
 
 	case "web":
-		log.Printf("web dashboard on http://%s (daemon socket %s)", *listen, cfg.Socket)
-		if err := serveWeb(cfg.Socket, *listen); err != nil {
+		auth := "off"
+		if cfg.WebPassword != "" {
+			auth = "on"
+		}
+		log.Printf("web dashboard on http://%s (daemon socket %s, password %s)", *listen, cfg.Socket, auth)
+		if err := serveWeb(cfg.Socket, *listen, cfg.WebPassword); err != nil {
 			log.Fatalf("web: %v", err)
 		}
 

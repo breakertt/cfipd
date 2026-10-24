@@ -212,6 +212,8 @@ func (d *daemon) handleCtl(req ctlRequest) {
 		ip := d.pool.ensure(addr, now)
 		ip.NextProbe = now
 		rep.v = "added"
+	case "/clients":
+		rep.v = d.clients.list()
 	case "/relay":
 		type rs struct {
 			Addr      string  `json:"addr"`

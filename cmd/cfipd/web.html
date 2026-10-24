@@ -71,6 +71,8 @@
   tbody tr:hover { background:var(--soft); }
   td.rank, td.dim { color:var(--muted); }
   td .addr { font-weight:500; margin-right:.4rem; }
+  td .dot { margin-right:.55rem; }
+  .off { color:var(--muted); opacity:.45; }
   .delta { font-size:.75rem; margin-left:.35rem; }
   @media (max-width:640px) { th, td { padding:.5rem .55rem; } .opt { display:none; } }
 
@@ -79,7 +81,9 @@
   .kpi .k { font:600 .6rem var(--mono); letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
   .kpi .v { font-size:1.35rem; font-weight:600; line-height:1.2; margin-top:.3rem; font-variant-numeric:tabular-nums; white-space:nowrap; }
   .kpi .v small { font-size:.7rem; font-weight:500; color:var(--muted); margin-left:.2em; }
-  .kpi .s { font:.68rem var(--mono); color:var(--muted); margin-top:.1rem; white-space:nowrap; }
+  .kpi { min-width:0; }
+  .kpi .s { font:.68rem var(--mono); color:var(--muted); margin-top:.1rem; }
+  .kpi .s span { white-space:nowrap; }
   .probes { margin-top:1rem; padding-top:.85rem; border-top:1px solid var(--line); }
   .probes .head { display:flex; align-items:baseline; gap:.6rem; margin-bottom:.5rem; }
   .probes .head .k { font:600 .6rem var(--mono); letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
@@ -111,6 +115,9 @@
 <h2><span data-i18n="h_active">Active</span><small data-i18n="sub_active"></small></h2>
 <div class="cards" id="actives"></div>
 
+<h2><span data-i18n="h_clients">Clients</span><small data-i18n="sub_clients"></small></h2>
+<div id="clients"></div>
+
 <h2><span data-i18n="h_select">Selection</span></h2>
 <div class="card sel" id="select"></div>
 
@@ -129,6 +136,7 @@ const I18N = {
   en: {
     title: 'cfipd dashboard', refresh: 'Refresh',
     h_overview: 'Overview', h_active: 'Active', sub_active: 'entry points that serve relay traffic now',
+    h_clients: 'Clients', sub_clients: 'relay users since start, last seen first',
     h_select: 'Selection', h_standby: 'Standby', sub_standby: 'ranked, best first · green: ms faster than the slowest active',
     st_loading: 'Loading…', st_nocon: 'Cannot reach cfipd', st_lost: 'Connection lost', st_stale: 'Data is stale',
     st_none: 'No active IP', st_serving: n => `${n} active ${n === 1 ? 'IP' : 'IPs'} serving`, st_degraded: n => ` · ${n} degraded`,
@@ -140,14 +148,17 @@ const I18N = {
     pk_comparing: 'comparing', pk_observing: s => `observing until ${s}`, pk_pending: s => `confirming ${s}`, pk_ready: 'ready',
     pk_last: 'last: ', pk_none: 'no PK result yet',
     th_ip: 'IP', th_probe: 'Probe time', th_jitter: 'Jitter', th_fail: 'Fail', th_samples: 'Samples', th_next: 'Next check',
+    th_client: 'Client', th_open: 'Open', th_conns: 'Conns', th_failed: 'Failed', th_up: '↑ Up', th_down: '↓ Down', th_last: 'Last seen', online: 'online',
     no_active: 'No active IP. cfipd promotes a standby when one passes the promotion test.', no_standby: 'No standby IP',
+    no_clients: 'No client has used the relay since start',
     k_active: 'Active', k_standby: 'Standby', k_cand: 'Candidates', k_relay: 'Relay', k_uptime: 'Uptime',
-    k_scan: 'Scan every', k_mem: 'Memory', k_tests: 'Tests today', k_probes: 'Probes today', conns: 'conns', degraded_n: n => `${n} degraded`,
+    k_clients: 'Clients', online_n: n => `${n} online`, k_mem: 'Memory', k_tests: 'Tests today', k_probes: 'Probes today', conns: 'conns', degraded_n: n => `${n} degraded`,
     note: 'Probe time is the median duration of an HTTPS trace request, not a pure TCP RTT. Jitter is p90 minus median. ¹ Bandwidth is the latest single-connection download test (promotion, PK, or recheck), not live throughput.',
   },
   zh: {
     title: 'cfipd 仪表盘', refresh: '刷新',
     h_overview: '概览', h_active: 'Active', sub_active: '当前承载 relay 流量的入口',
+    h_clients: '客户端', sub_clients: '自启动以来使用 relay 的客户端，最近的在前',
     h_select: '选择', h_standby: 'Standby', sub_standby: '按优先级排名 · 绿色数字：比最慢的 Active 快多少 ms',
     st_loading: '加载中…', st_nocon: '无法连接 cfipd', st_lost: '连接中断', st_stale: '数据过期',
     st_none: '没有 Active IP', st_serving: n => `${n} 个 Active 在转发`, st_degraded: n => ` · ${n} 个降级`,
@@ -159,9 +170,11 @@ const I18N = {
     pk_comparing: '对比中', pk_observing: s => `观察期至 ${s}`, pk_pending: s => `待确认 ${s}`, pk_ready: '就绪',
     pk_last: '上次：', pk_none: '还没有 PK 结果',
     th_ip: 'IP', th_probe: '探测耗时', th_jitter: '抖动', th_fail: '失败率', th_samples: '样本', th_next: '下次检查',
+    th_client: '客户端', th_open: '当前', th_conns: '连接', th_failed: '失败', th_up: '↑ 上行', th_down: '↓ 下行', th_last: '最近使用', online: '在线',
     no_active: '当前没有 Active IP。有后备通过转正测试后，cfipd 会自动补上。', no_standby: '当前没有 Standby IP',
+    no_clients: '启动以来还没有客户端使用 relay',
     k_active: 'Active', k_standby: 'Standby', k_cand: '候选', k_relay: 'Relay', k_uptime: '运行时长',
-    k_scan: '扫描间隔', k_mem: '内存', k_tests: '今日测速', k_probes: '今日探测', conns: '连接', degraded_n: n => `${n} 个降级`,
+    k_clients: '客户端', online_n: n => `${n} 在线`, k_mem: '内存', k_tests: '今日测速', k_probes: '今日探测', conns: '连接', degraded_n: n => `${n} 个降级`,
     note: '探测耗时为 HTTPS trace 请求耗时的中位数，不是纯 TCP RTT；抖动为 p90 减中位数。¹ 带宽是最近一次单连接下载测试的结果（转正、PK 或复测），不是实时吞吐。',
   },
 };
@@ -209,19 +222,19 @@ function setBadge() {
   el.innerHTML = `<span class="dot"></span>${esc(text)}`;
 }
 
-function render(status, standbys, relay) {
+function render(status, standbys, relay, clients) {
   const relayBy = Object.fromEntries(relay.map(r => [r.addr, r]));
   const degraded = status.actives.filter(a => a.state !== 'healthy').length;
   const rt = relay.reduce((s, r) => ({ n: s.n + r.total, up: s.up + r.bytes_up, down: s.down + r.bytes_down }), { n: 0, up: 0, down: 0 });
-  const mem = status.memory_mb;
+  const mem = status.memory_mb, online = clients.filter(c => c.open > 0).length;
   const probes = Object.entries(status.probes_today || {}).sort((x, y) => y[1] - x[1]);
   const total = probes.reduce((s, [, v]) => s + v, 0);
   const shade = i => (1 - i * 0.7 / Math.max(1, probes.length - 1)).toFixed(2);
   $('overview').innerHTML = `<div class="kpis">${[
     ['k_active', status.actives.length, degraded ? `<span class="warn">${t('degraded_n')(degraded)}</span>` : ''],
     ['k_standby', status.standbys], ['k_cand', status.candidates],
-    ['k_relay', vu(rt.n, t('conns')), `↑ ${bytes(rt.up)}  ↓ ${bytes(rt.down)}`],
-    ['k_uptime', dur(status.uptime)], ['k_scan', dur(status.scan_every)],
+    ['k_relay', vu(rt.n, t('conns')), `<span>↑ ${bytes(rt.up)}</span> <span>↓ ${bytes(rt.down)}</span>`],
+    ['k_clients', clients.length, online ? `<span class="ok">${t('online_n')(online)}</span>` : ''], ['k_uptime', dur(status.uptime)],
     ['k_mem', mem ? vu(mem.go_in_use, '/ ' + mem.limit + ' MB') : '—'], ['k_tests', bytesVU(status.bytes_today)],
   ].map(([k, v, sub]) => `<div class="kpi"><div class="k">${t(k)}</div><div class="v">${v}</div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`).join('')}</div>
   <div class="probes">
@@ -251,6 +264,15 @@ function render(status, standbys, relay) {
       ].map(([k, v]) => `<span class="k">${t(k)}</span><span class="v">${v}</span>`).join('')}</div>
     </div>`;
   }).join('') : `<div class="empty">${t('no_active')}</div>`;
+
+  $('clients').innerHTML = clients.length ? `<div class="card tw"><table>
+    <thead><tr><th class="l">${t('th_client')}</th><th class="opt">${t('th_open')}</th><th class="opt">${t('th_conns')}</th><th class="opt">${t('th_failed')}</th>
+      <th class="opt">${t('th_up')}</th><th>${t('th_down')}</th><th>${t('th_last')}</th></tr></thead>
+    <tbody>${clients.map(c => `<tr><td class="l"><span class="dot ${c.open > 0 ? 'ok' : 'off'}"></span><span class="mono addr">${esc(c.addr)}</span></td>
+      <td class="opt">${c.open}</td><td class="opt">${c.total}</td><td class="opt ${c.fails ? 'bad' : 'dim'}">${c.fails}</td>
+      <td class="opt">${bytes(c.bytes_up)}</td><td>${bytes(c.bytes_down)}</td>
+      <td class="${c.open > 0 ? 'ok' : 'dim'}">${c.open > 0 ? t('online') : ago(c.last_seen)}</td></tr>`).join('')}</tbody>
+    </table></div>` : `<div class="empty">${t('no_clients')}</div>`;
 
   const pk = status.pk || {};
   const pkState = pk.running ? ['ok', t('pk_comparing')]
@@ -301,13 +323,13 @@ async function poll() {
   inflight = true;
   $('refresh').disabled = true;
   try {
-    const [status, standbys, relay] = await Promise.all(
-      ['api/status', 'api/standbys', 'api/relay'].map(async u => {
+    const [status, standbys, relay, clients] = await Promise.all(
+      ['api/status', 'api/standbys', 'api/relay', 'api/clients'].map(async u => {
         const r = await fetch(u);
         if (!r.ok) throw new Error(u + ': HTTP ' + r.status + ' ' + (await r.text()).trim());
         return r.json();
       }));
-    lastData = [status, standbys || [], relay || []];
+    lastData = [status, standbys || [], relay || [], clients || []];
     render(...lastData);
     lastOK = Date.now();
     failed = false;

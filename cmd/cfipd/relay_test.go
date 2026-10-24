@@ -224,3 +224,112 @@ func TestCopyCountedUsesPooledBuffer(t *testing.T) {
 		t.Fatalf("counted %d bytes", got)
 	}
 }
+
+// relayVia starts a relay for d in front of an echo upstream on 127.0.0.1 and
+// returns the relay address. With active false, the pool has no active.
+func relayVia(t *testing.T, d *daemon, active bool) string {
+	t.Helper()
+	up, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { up.Close() })
+	go func() {
+		for {
+			c, err := up.Accept()
+			if err != nil {
+				return
+			}
+			go io.Copy(c, c)
+		}
+	}()
+	_, port, _ := net.SplitHostPort(up.Addr().String())
+	fmt.Sscanf(port, "%d", &d.cfg.RelayPort)
+	if active {
+		d.pool.ips["127.0.0.1"] = &IP{Addr: "127.0.0.1", Role: RoleActive, State: StateHealthy, Colo: "NRT"}
+	}
+	d.updateRelaySnap()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go d.handleRelayConn(c)
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// waitClient polls the client table until cond holds for the only client.
+func waitClient(t *testing.T, d *daemon, cond func(clientView) bool) clientView {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		cs := d.clients.list()
+		if len(cs) == 1 && cond(cs[0]) {
+			return cs[0]
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("client table: %+v", cs)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A relay connection is counted under its client IP: open while it lasts,
+// with the bytes that it moved, and closed afterwards.
+func TestRelayCountsClients(t *testing.T) {
+	d := testDaemon(t)
+	cli, err := net.Dial("tcp", relayVia(t, d, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli.SetDeadline(time.Now().Add(2 * time.Second))
+	cli.Write([]byte("hello"))
+	if _, err := io.ReadFull(cli, make([]byte, 5)); err != nil {
+		t.Fatal(err)
+	}
+	c := waitClient(t, d, func(c clientView) bool { return c.BytesDown == 5 })
+	if c.Addr != "127.0.0.1" || c.Total != 1 || c.Open != 1 || c.BytesUp != 5 || c.Fails != 0 || c.Last == "" {
+		t.Fatalf("open connection: %+v", c)
+	}
+	cli.Close()
+	waitClient(t, d, func(c clientView) bool { return c.Open == 0 && c.Total == 1 })
+}
+
+// With no active to dial, the client still shows up, with a failure.
+func TestRelayCountsClientFailures(t *testing.T) {
+	d := testDaemon(t)
+	cli, err := net.Dial("tcp", relayVia(t, d, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+	waitClient(t, d, func(c clientView) bool { return c.Total == 1 && c.Fails == 1 && c.Open == 0 })
+}
+
+// The relay port can face the internet, so the table is bounded: a new client
+// replaces the idle client seen longest ago, never a busy one.
+func TestClientTableEvictsIdleOldest(t *testing.T) {
+	var ct clientTable
+	busy := ct.open("busy", t0)
+	for i := 1; i < maxClients; i++ {
+		ct.done(ct.open(fmt.Sprint("idle", i), t0.Add(time.Duration(i)*time.Second)), false)
+	}
+	ct.open("new", t0.Add(time.Hour))
+	seen := map[string]bool{}
+	for _, c := range ct.list() {
+		seen[c.Addr] = true
+	}
+	if len(seen) != maxClients || !seen["busy"] || !seen["new"] || seen["idle1"] || !seen["idle2"] {
+		t.Fatalf("after eviction: %d clients, busy=%v new=%v idle1=%v idle2=%v",
+			len(seen), seen["busy"], seen["new"], seen["idle1"], seen["idle2"])
+	}
+	ct.done(busy, false)
+}

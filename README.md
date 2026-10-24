@@ -131,6 +131,7 @@ It logs every problem that `cfipd test` reports.
 | `zone_probe_host` | A proxied (orange-cloud) hostname used to reject edge IPs that answer Cloudflare error 1034 for ordinary zones; empty disables the check | empty |
 | `active_count` | Number of active endpoints | `3` |
 | `relay_listen` | HTTPS relay bind address; empty string disables it | `:8443` |
+| `web_password` | Password for the dashboard (HTTP Basic auth, any user name); empty disables it | empty |
 | `health_interval` | Starting health-check interval | `"10s"` |
 | `scan_v6_ratio` | Share of new-address discovery assigned to IPv6 | `0.2` |
 | `promote_min_mbps` | Minimum throughput required for promotion | `30` |
@@ -156,6 +157,7 @@ the daemon through its Unix socket.
 | `cfipd actives` / `cfipd standbys` / `cfipd candidates` | Inspect endpoint pools |
 | `cfipd prefixes` | Inspect learned prefix statistics |
 | `cfipd relay` | Per-endpoint connection and traffic statistics |
+| `cfipd clients` | Relay connections and traffic per client IP since start (at most 256 clients) |
 | `cfipd scan` | Schedule a discovery probe |
 | `cfipd import FILE` | Import IPs or a CloudflareSpeedTest CSV as candidate seeds |
 | `cfipd promote IP` | Qualify a standby for a vacant active slot |
@@ -165,7 +167,7 @@ the daemon through its Unix socket.
 
 The dashboard can also be started directly with `cfipd web`. It listens on
 `127.0.0.1:8080` by default; `-listen` changes the bind address. Its read-only APIs
-are `/api/status`, `/api/standbys`, and `/api/relay`. The page requests them with
+are `/api/status`, `/api/standbys`, `/api/relay`, and `/api/clients`. The page requests them with
 relative paths, so a reverse proxy can mount the dashboard under a subpath such as
 `/cfipd/`. The proxy must strip the prefix, and the page URL must end with `/`.
 
@@ -262,8 +264,10 @@ new HTTPS connections; established sessions keep their existing upstream.
   more frequent garbage collection; the `GOMEMLIMIT` environment variable
   overrides it. `cfipd web` is a separate process, so leave it off where memory
   is tight. `cfipd status` shows the Go memory in use and the limit.
-- The relay and dashboard have no authentication. Restrict their bind addresses
-  or network access; keep the dashboard on loopback or a trusted network.
+- The relay has no authentication. The dashboard has only the optional
+  `web_password`, sent in clear text over plain HTTP. Restrict their bind addresses
+  or network access. Keep the dashboard on loopback or a trusted network. If you
+  set `web_password`, make `/etc/cfipd.json` readable only by root and `cfipd`.
 
 ## Development
 

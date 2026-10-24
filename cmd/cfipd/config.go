@@ -33,6 +33,9 @@ func (d Duration) MarshalJSON() ([]byte, error) { return json.Marshal(d.String()
 type Config struct {
 	DataDir string `json:"data_dir"`
 	Socket  string `json:"socket"`
+	// WebPassword, if set, protects `cfipd web` with HTTP Basic auth; the
+	// user name is ignored.
+	WebPassword string `json:"web_password"`
 
 	TraceURL string `json:"trace_url"`
 	DownURL  string `json:"down_url"`

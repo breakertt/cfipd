@@ -119,6 +119,7 @@ systemd 服务传入 `-config /etc/cfipd.json`，所以 `CFIPD_CONFIG_PATH` 不�
 | `zone_probe_host` | 一个已开橙云的普通主机名，用来淘汰对普通 zone 返回 Cloudflare 1034 错误的入口 IP；留空则不检查 | 空 |
 | `active_count` | 现役入口数量 | `3` |
 | `relay_listen` | HTTPS relay 监听地址；空字符串关闭 relay | `:8443` |
+| `web_password` | 面板密码（HTTP Basic 认证，用户名任意）；留空则不认证 | 空 |
 | `health_interval` | 健康检查的起始间隔 | `"10s"` |
 | `scan_v6_ratio` | 新地址发现中分配给 IPv6 的比例 | `0.2` |
 | `promote_min_mbps` | 转正所需的最低吞吐量 | `30` |
@@ -141,6 +142,7 @@ systemd 的目录设置和权限。
 | `cfipd actives` / `cfipd standbys` / `cfipd candidates` | 查看各入口池 |
 | `cfipd prefixes` | 查看前缀学习统计 |
 | `cfipd relay` | 各入口的连接与流量统计 |
+| `cfipd clients` | 启动以来各客户端 IP 的 relay 连接与流量（最多记 256 个） |
 | `cfipd scan` | 安排一次新地址探测 |
 | `cfipd import FILE` | 将 IP 列表或 CloudflareSpeedTest CSV 导入为候选种子 |
 | `cfipd promote IP` | 验证一个 Standby，尝试补入空缺的现役位置 |
@@ -149,7 +151,7 @@ systemd 的目录设置和权限。
 | `cfipd version` | 查看版本、源码提交和构建时间 |
 
 也可直接执行 `cfipd web` 启动面板，默认监听 `127.0.0.1:8080`，用 `-listen` 调整地址。
-只读 API 为 `/api/status`、`/api/standbys` 和 `/api/relay`。页面用相对路径请求它们，
+只读 API 为 `/api/status`、`/api/standbys`、`/api/relay` 和 `/api/clients`。页面用相对路径请求它们，
 反向代理可以把面板挂在 `/cfipd/` 这类子路径下：转发时要去掉前缀，页面地址要以 `/` 结尾。
 
 ## 工作机制
@@ -218,8 +220,9 @@ TLS 握手和 HTTP 请求由客户端与 Cloudflare 处理。复用同一条 HTT
   内存紧张时收紧。小内存路由器上可设置 `memory_limit_mb`（例如 `12`），让运行时更紧凑，
   代价是垃圾回收更频繁；环境变量 `GOMEMLIMIT` 优先于它。`cfipd web` 是单独的进程，
   内存紧张时不要启用。`cfipd status` 显示 Go 当前用量和上限。
-- relay 和面板均无认证。限制监听地址或网络访问范围；面板保持回环监听，或只开放给可信
-  网络。
+- relay 无认证。面板只有可选的 `web_password`，经明文 HTTP 传输。限制监听地址或网络
+  访问范围；面板保持回环监听，或只开放给可信网络。设置 `web_password` 后，让
+  `/etc/cfipd.json` 只有 root 和 `cfipd` 可读。
 
 ## 开发
 

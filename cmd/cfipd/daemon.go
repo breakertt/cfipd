@@ -94,6 +94,7 @@ type daemon struct {
 
 	relaySnap   atomic.Value // []relayTarget, written by event loop, read by relay goroutines
 	relayStats  map[string]*RelayStat
+	clients     clientTable
 	ctx         context.Context
 	discovering int
 

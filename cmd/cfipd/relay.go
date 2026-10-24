@@ -6,6 +6,7 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -28,27 +29,112 @@ type relayTarget struct {
 	Gen    uint64 // active generation at snapshot time; scopes dial feedback
 }
 
+// maxClients bounds the client table: the relay port can face the internet.
+const maxClients = 256
+
+// clientTable counts relay use per client IP since start. Relay goroutines
+// write it under mu; bytes are atomic because the copy loops add to them.
+type clientTable struct {
+	mu sync.Mutex
+	m  map[string]*clientStat
+}
+
+type clientStat struct {
+	total, open, fails int64     // guarded by clientTable.mu
+	last               time.Time // guarded by clientTable.mu
+	up, down           atomic.Int64
+}
+
+type clientView struct {
+	Addr      string `json:"addr"`
+	Total     int64  `json:"total"`
+	Open      int64  `json:"open"`
+	Fails     int64  `json:"fails"`
+	BytesUp   int64  `json:"bytes_up"`
+	BytesDown int64  `json:"bytes_down"`
+	Last      string `json:"last_seen"`
+}
+
+// open records a new connection from addr. A full table drops the idle client
+// seen longest ago; if every client is busy, the connection is counted in a
+// stat outside the table.
+func (t *clientTable) open(addr string, now time.Time) *clientStat {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	c := t.m[addr]
+	if c == nil {
+		c = &clientStat{}
+		if t.m == nil {
+			t.m = map[string]*clientStat{}
+		}
+		if len(t.m) < maxClients || t.evictIdle() {
+			t.m[addr] = c
+		}
+	}
+	c.total++
+	c.open++
+	c.last = now
+	return c
+}
+
+func (t *clientTable) evictIdle() bool {
+	var old *clientStat
+	var oldAddr string
+	for a, c := range t.m {
+		if c.open == 0 && (old == nil || c.last.Before(old.last)) {
+			old, oldAddr = c, a
+		}
+	}
+	if old != nil {
+		delete(t.m, oldAddr)
+	}
+	return old != nil
+}
+
+func (t *clientTable) done(c *clientStat, failed bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	c.open--
+	if failed {
+		c.fails++
+	}
+}
+
+// list returns the clients, last seen first.
+func (t *clientTable) list() []clientView {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]clientView, 0, len(t.m))
+	for a, c := range t.m {
+		out = append(out, clientView{a, c.total, c.open, c.fails, c.up.Load(), c.down.Load(), c.last.Format(time.RFC3339)})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Last > out[j].Last })
+	return out
+}
+
 // relayBufs holds the copy buffers of relay connections.
 var relayBufs = sync.Pool{New: func() any { b := make([]byte, 16<<10); return &b }}
 
 // copyCounted copies src to dst through a pooled 16 KiB buffer (one full TLS
 // record per read) and counts the
-// bytes. Wrapping src hides net.TCPConn's WriteTo, which would allocate its
+// bytes into each counter. Wrapping src hides net.TCPConn's WriteTo, which would allocate its
 // own 32 KiB buffer for every direction of every connection.
-func copyCounted(dst io.Writer, src io.Reader, n *atomic.Int64) {
+func copyCounted(dst io.Writer, src io.Reader, ns ...*atomic.Int64) {
 	buf := relayBufs.Get().(*[]byte)
 	defer relayBufs.Put(buf)
-	io.CopyBuffer(countWriter{dst, n}, struct{ io.Reader }{src}, *buf)
+	io.CopyBuffer(countWriter{dst, ns}, struct{ io.Reader }{src}, *buf)
 }
 
 type countWriter struct {
-	w io.Writer
-	n *atomic.Int64
+	w  io.Writer
+	ns []*atomic.Int64
 }
 
 func (cw countWriter) Write(p []byte) (int, error) {
 	n, err := cw.w.Write(p)
-	cw.n.Add(int64(n))
+	for _, c := range cw.ns {
+		c.Add(int64(n))
+	}
 	return n, err
 }
 
@@ -123,6 +209,12 @@ func (d *daemon) serveRelay(ctx context.Context) {
 
 func (d *daemon) handleRelayConn(c net.Conn) {
 	defer c.Close()
+	host, _, err := net.SplitHostPort(c.RemoteAddr().String())
+	if err != nil {
+		host = c.RemoteAddr().String()
+	}
+	cs, served := d.clients.open(host, time.Now()), false
+	defer func() { d.clients.done(cs, !served) }()
 	ts, _ := d.relaySnap.Load().([]relayTarget)
 	if len(ts) == 0 {
 		return
@@ -157,20 +249,21 @@ func (d *daemon) handleRelayConn(c net.Conn) {
 	if up == nil {
 		return
 	}
+	served = true
 	defer up.Close()
 	defer chosen.Stat.Conns.Add(-1)
 
 	st := chosen.Stat
 	done := make(chan struct{}, 2)
 	go func() {
-		copyCounted(up, c, &st.BytesUp)
+		copyCounted(up, c, &st.BytesUp, &cs.up)
 		if tc, ok := up.(*net.TCPConn); ok {
 			tc.CloseWrite()
 		}
 		done <- struct{}{}
 	}()
 	go func() {
-		copyCounted(c, up, &st.BytesDown)
+		copyCounted(c, up, &st.BytesDown, &cs.down)
 		if tc, ok := c.(*net.TCPConn); ok {
 			tc.CloseWrite()
 		}

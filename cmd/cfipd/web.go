@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	_ "embed"
 	"net/http"
 )
@@ -14,12 +15,19 @@ var webAPI = map[string]string{
 	"/api/status":   "/status",
 	"/api/standbys": "/standbys",
 	"/api/relay":    "/relay",
+	"/api/clients":  "/clients",
 }
 
 // serveWeb runs the read-only dashboard. It talks to the daemon exclusively
 // through the unix socket ctl interface, so it never touches daemon state
 // directly and can run as a separate process.
-func serveWeb(sock, listen string) error {
+func serveWeb(sock, listen, password string) error {
+	return http.ListenAndServe(listen, webHandler(sock, password))
+}
+
+// webHandler serves the page and the API. A non-empty password protects every
+// path with HTTP Basic auth; the user name is ignored.
+func webHandler(sock, password string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -38,5 +46,16 @@ func serveWeb(sock, listen string) error {
 			w.Write(raw)
 		})
 	}
-	return http.ListenAndServe(listen, mux)
+	if password == "" {
+		return mux
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, pass, _ := r.BasicAuth()
+		if subtle.ConstantTimeCompare([]byte(pass), []byte(password)) != 1 {
+			w.Header().Set("WWW-Authenticate", `Basic realm="cfipd"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
