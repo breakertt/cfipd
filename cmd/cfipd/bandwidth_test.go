@@ -1,6 +1,9 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -226,5 +229,26 @@ func TestFloorActsOnlyWhereReachable(t *testing.T) {
 	d.replaceLowBandwidth(t0)
 	if !d.promoting {
 		t.Fatal("with the floor reachable, a confirmed below-floor active must get a replacement test")
+	}
+}
+
+// TestRecheckLogMatchesAction: a confirmed below-floor result logs that a
+// replacement is sought only where the floor is reachable; on a slow link it
+// logs that nothing changes.
+func TestRecheckLogMatchesAction(t *testing.T) {
+	d := testDaemon(t)
+	a := sinActive("198.18.0.1", 300)
+	a.Speed, a.SpeedAt, a.BelowFloorN = 20, t0, 1
+	d.pool.ips[a.Addr] = a
+	d.rechecking = true
+	d.apply(jobResult{job: job{kind: jRecheck, ip: a.Addr, gen: a.Gen}, ok: true,
+		speed: SpeedResult{Mbps: 21, Bytes: 1, Colo: "SIN"}})
+	d.store.Close()
+	b, err := os.ReadFile(filepath.Join(d.store.dir, "history.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if log := string(b); strings.Contains(log, "seeking a replacement") || !strings.Contains(log, "nothing changes") {
+		t.Fatalf("on a slow link the event must say nothing changes:\n%s", log)
 	}
 }

@@ -58,8 +58,11 @@ func (d *daemon) applyRecheck(r jobResult, ip *IP, now time.Time) {
 	case ip.BelowFloorN == 1:
 		d.logEvent(fmt.Sprintf("%s bandwidth %.1fMbps < %.1fMbps floor; confirming in about an hour",
 			ip.Addr, ip.Speed, d.cfg.PromoteMinMbps), now)
-	case ip.belowFloor():
+	case ip.belowFloor() && d.pool.floorReachable():
 		d.logEvent(fmt.Sprintf("%s bandwidth %.1fMbps < %.1fMbps floor (confirmed); seeking a replacement",
+			ip.Addr, ip.Speed, d.cfg.PromoteMinMbps), now)
+	case ip.belowFloor():
+		d.logEvent(fmt.Sprintf("%s bandwidth %.1fMbps < %.1fMbps floor (confirmed); no active reaches the floor, so nothing changes",
 			ip.Addr, ip.Speed, d.cfg.PromoteMinMbps), now)
 	}
 }
