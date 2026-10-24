@@ -267,7 +267,8 @@ new HTTPS connections; established sessions keep their existing upstream.
 - The relay has no authentication. The dashboard has only the optional
   `web_password`, sent in clear text over plain HTTP. Restrict their bind addresses
   or network access. Keep the dashboard on loopback or a trusted network. If you
-  set `web_password`, make `/etc/cfipd.json` readable only by root and `cfipd`.
+  set `web_password`, make `/etc/cfipd.json` readable only by root and `cfipd`. For
+  the Debian package: `sudo chown root:cfipd /etc/cfipd.json && sudo chmod 640 /etc/cfipd.json`.
 
 ## Development
 

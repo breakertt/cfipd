@@ -222,7 +222,8 @@ TLS 握手和 HTTP 请求由客户端与 Cloudflare 处理。复用同一条 HTT
   内存紧张时不要启用。`cfipd status` 显示 Go 当前用量和上限。
 - relay 无认证。面板只有可选的 `web_password`，经明文 HTTP 传输。限制监听地址或网络
   访问范围；面板保持回环监听，或只开放给可信网络。设置 `web_password` 后，让
-  `/etc/cfipd.json` 只有 root 和 `cfipd` 可读。
+  `/etc/cfipd.json` 只有 root 和 `cfipd` 可读。Debian 包的做法：
+  `sudo chown root:cfipd /etc/cfipd.json && sudo chmod 640 /etc/cfipd.json`。
 
 ## 开发
 
