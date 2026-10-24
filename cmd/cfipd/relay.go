@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"net"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -25,6 +26,18 @@ type relayTarget struct {
 	Weight float64
 	Stat   *RelayStat
 	Gen    uint64 // active generation at snapshot time; scopes dial feedback
+}
+
+// relayBufs holds the copy buffers of relay connections.
+var relayBufs = sync.Pool{New: func() any { b := make([]byte, 8<<10); return &b }}
+
+// copyCounted copies src to dst through a pooled 8 KiB buffer and counts the
+// bytes. Wrapping src hides net.TCPConn's WriteTo, which would allocate its
+// own 32 KiB buffer for every direction of every connection.
+func copyCounted(dst io.Writer, src io.Reader, n *atomic.Int64) {
+	buf := relayBufs.Get().(*[]byte)
+	defer relayBufs.Put(buf)
+	io.CopyBuffer(countWriter{dst, n}, struct{ io.Reader }{src}, *buf)
 }
 
 type countWriter struct {
@@ -148,14 +161,14 @@ func (d *daemon) handleRelayConn(c net.Conn) {
 	st := chosen.Stat
 	done := make(chan struct{}, 2)
 	go func() {
-		io.Copy(countWriter{up, &st.BytesUp}, c)
+		copyCounted(up, c, &st.BytesUp)
 		if tc, ok := up.(*net.TCPConn); ok {
 			tc.CloseWrite()
 		}
 		done <- struct{}{}
 	}()
 	go func() {
-		io.Copy(countWriter{c, &st.BytesDown}, up)
+		copyCounted(c, up, &st.BytesDown)
 		if tc, ok := c.(*net.TCPConn); ok {
 			tc.CloseWrite()
 		}

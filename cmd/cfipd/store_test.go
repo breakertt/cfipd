@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -225,5 +228,81 @@ func TestSpeedNextSurvivesRestart(t *testing.T) {
 	}
 	if !p.speedNext.Equal(next) || !p.speedPaused.Equal(paused) {
 		t.Fatalf("download schedule lost across restart: got %v/%v want %v/%v", p.speedNext, p.speedPaused, next, paused)
+	}
+}
+
+// snapshotFixture is a small snapshot with every field set. Fixture data, not
+// production state.
+func snapshotFixture() *snapshot {
+	at := time.Date(2026, 10, 20, 8, 0, 0, 0, time.UTC)
+	return &snapshot{
+		SavedAt: at,
+		IPs: map[string]*IP{
+			"198.18.0.1": {Addr: "198.18.0.1", Role: RoleActive, State: StateHealthy, Colo: "SIN", Gen: 3,
+				Win: []Obs{{OK: true, RTT: 270, Colo: "SIN", T: at}}, Speed: 80, SpeedAt: at, SpeedDue: at.Add(time.Hour)},
+			"198.18.1.1": {Addr: "198.18.1.1", Role: RoleStandby, Colo: "NRT", Gen: 1},
+		},
+		Prefixes: map[string]*PrefixStat{
+			"198.18.0": {Prefix: "198.18.0", Probes: 5, OK: 4, ColoOK: 4, RTTSum: 1000, RTTCount: 4, LastProbe: at},
+			"198.18.1": {Prefix: "198.18.1", Probes: 1, LastProbe: at},
+		},
+		PK:          &pkPersist{ObserveUntil: at, Day: "2026-10-20", BWUsed: 1},
+		Day:         "2026-10-20",
+		DayCounts:   map[string]int{"health": 7},
+		DayBytes:    123,
+		SpeedNext:   at.Add(15 * time.Minute),
+		SpeedPaused: at.Add(time.Hour),
+	}
+}
+
+// TestSnapshotStreamMatchesStructFormat: the streamed snapshot decodes, with
+// the struct's JSON tags, to exactly what was written, so Load and older
+// readers see the same state file format.
+func TestSnapshotStreamMatchesStructFormat(t *testing.T) {
+	want := snapshotFixture()
+	var buf bytes.Buffer
+	if err := writeSnapshot(&buf, want); err != nil {
+		t.Fatal(err)
+	}
+	var got snapshot
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(&got, want) {
+		t.Fatalf("streamed snapshot differs under json.Unmarshal:\n got %+v\nwant %+v", got, *want)
+	}
+}
+
+// TestSnapshotSaveStaysLean: a save streams entry by entry instead of
+// building the whole document; it must allocate well under a one-shot
+// json.Marshal of the same state, measured in the same process (race mode
+// inflates both). The 6000 prefixes are fixtures sized like a production
+// state.
+func TestSnapshotSaveStaysLean(t *testing.T) {
+	d := testDaemon(t)
+	for i := range 6000 {
+		key := fmt.Sprintf("%d.%d.%d", 100+i/65536, i/256%256, i%256)
+		d.scan.stats[key] = &PrefixStat{Prefix: key, Probes: 3, OK: 2, ColoOK: 2, RTTSum: 500, RTTCount: 2, LastProbe: time.Now()}
+	}
+	alloc := func(f func() error) float64 {
+		runtime.GC()
+		var a, b runtime.MemStats
+		runtime.ReadMemStats(&a)
+		if err := f(); err != nil {
+			t.Fatal(err)
+		}
+		runtime.ReadMemStats(&b)
+		return float64(b.TotalAlloc-a.TotalAlloc) / 1e6
+	}
+	oneShot := alloc(func() error { _, err := json.Marshal(&snapshot{IPs: d.pool.ips, Prefixes: d.scan.stats}); return err })
+	save := alloc(func() error { return d.store.Save(d.pool, d.scan) })
+	t.Logf("save %.2f MB, one-shot json.Marshal %.2f MB", save, oneShot)
+	if save > oneShot/2 {
+		t.Fatalf("a save allocated %.2f MB vs %.2f MB one-shot; it must stream", save, oneShot)
+	}
+	p := NewPool(d.cfg)
+	scan := NewScanner(d.cfg, func(string) bool { return false }, p.bestActiveMedian)
+	if err := d.store.Load(p, scan); err != nil || len(scan.stats) != 6000 {
+		t.Fatalf("loaded %d prefixes (%v), want 6000", len(scan.stats), err)
 	}
 }

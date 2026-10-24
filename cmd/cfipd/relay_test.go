@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"net"
+	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -191,5 +194,29 @@ func TestRelayFeedbackReachesPromotedActive(t *testing.T) {
 	}
 	if st := d.relayStat(ip.Addr); st.Total != 1 || st.EMAms <= 0 {
 		t.Fatalf("relay feedback must reach a promoted active, got total=%d ema=%.1f", st.Total, st.EMAms)
+	}
+}
+
+// TestCopyCountedUsesPooledBuffer: relay copies reuse a pooled 8 KiB buffer
+// instead of allocating 32 KiB per direction per connection, and count bytes.
+func TestCopyCountedUsesPooledBuffer(t *testing.T) {
+	payload := bytes.Repeat([]byte("x"), 64<<10)
+	r := bytes.NewReader(payload)
+	var n atomic.Int64
+	copyCounted(io.Discard, r, &n) // warm the pool
+	const runs = 64
+	runtime.GC()
+	var a, b runtime.MemStats
+	runtime.ReadMemStats(&a)
+	for range runs {
+		r.Reset(payload)
+		copyCounted(io.Discard, r, &n)
+	}
+	runtime.ReadMemStats(&b)
+	if per := (b.TotalAlloc - a.TotalAlloc) / runs; per > 16<<10 {
+		t.Fatalf("each copy allocated %d bytes; the buffer must come from the pool", per)
+	}
+	if got := n.Load(); got != int64(runs+1)*int64(len(payload)) {
+		t.Fatalf("counted %d bytes", got)
 	}
 }

@@ -27,8 +27,9 @@ Go 源码是 `cmd/cfipd/` 下的单个 main 包，下表中的源文件都在这
 | `bandwidth.go` | Active 带宽定期复测（低于转正下限需连续两次确认），确认后寻找替换 |
 | `ip.go` | 角色、健康状态、真实观测窗口、候选生命周期和分散约束 |
 | `probe.go` / `scanner.go` | HTTPS 探测、限时下载测速、地址采样和前缀反馈 |
-| `store.go` | 原子 JSON 快照、旧格式迁移、JSONL 流水和轮转 |
-| `relay.go` | TCP 透传、供新连接读取的原子快照、真实流量反馈 |
+| `store.go` | 原子 JSON 快照（逐条流式写出）、旧格式迁移、JSONL 流水和轮转 |
+| `relay.go` | TCP 透传（共享 8KiB 复制缓冲）、供新连接读取的原子快照、真实流量反馈 |
+| `memory.go` | Go 软内存上限：固定值，或按主机剩余内存每分钟调整 |
 | `ctl.go` / `web.go` / `web.html` | Unix socket 控制接口和独立只读仪表盘 |
 | `packaging/` / `scripts/` / `.github/workflows/ci.yml` | systemd、Debian 包、构建和发布验收 |
 

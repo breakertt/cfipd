@@ -80,6 +80,8 @@ type Config struct {
 	SpeedRecheck     Duration `json:"speed_recheck"` // re-measure each active this often; 0 disables
 	SpeedGap         Duration `json:"speed_gap"`     // minimum time between bandwidth downloads
 
+	MemoryLimitMB int `json:"memory_limit_mb"` // Go soft memory limit; 0 follows the host's free memory
+
 	MaxActivePerPrefix int `json:"max_active_per_prefix24"`
 	MaxActivePerColo   int `json:"max_active_per_colo"`
 
@@ -212,6 +214,7 @@ func (c *Config) check() error {
 		{"workers", c.Workers >= 1},
 		{"candidate_cap", c.CandidateCap >= 1},
 		{"candidate_per_prefix", c.CandidatePerPrefix >= 1},
+		{"memory_limit_mb", c.MemoryLimitMB >= 0},
 	} {
 		if !v.ok {
 			return fmt.Errorf("%s: value out of range", v.key)

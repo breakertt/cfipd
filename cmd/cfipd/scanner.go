@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net"
 	"net/netip"
+	"strings"
 	"time"
 )
 
@@ -115,6 +116,17 @@ func (s *PrefixStat) bad() bool {
 
 // stale means the feedback is too old to describe the current network.
 func (s *PrefixStat) stale(now time.Time) bool { return now.Sub(s.LastProbe) > 7*24*time.Hour }
+
+// prune drops v6 statistics stale for more than 7 days: goodV6 already skips
+// them, and v6 /48 keys are the only statistics that grow without bound. v4
+// keys are limited to the bundled /24 table and keep steering sampling.
+func (s *Scanner) prune(now time.Time) {
+	for k, st := range s.stats {
+		if strings.Contains(k, ":") && st.stale(now) {
+			delete(s.stats, k)
+		}
+	}
+}
 
 // blockKeyV4 is the one canonical v4 prefix key ("a.b.c", a /24).
 func blockKeyV4(b [4]byte) string {

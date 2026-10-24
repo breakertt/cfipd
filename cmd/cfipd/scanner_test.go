@@ -71,3 +71,24 @@ func TestZoneProbeRestrictedMakesThePrefixBadImmediately(t *testing.T) {
 		t.Fatalf("prefix must be learned as bad right after one 1034, got %+v", st)
 	}
 }
+
+// TestPruneDropsOnlyUnusableV6Stats: v6 statistics stale for more than 7
+// days no longer steer sampling (goodV6 skips them) and are the only ones
+// that grow without bound, so prune drops exactly those. v4 statistics are
+// bounded by the bundled /24 table and keep steering sampling when stale.
+func TestPruneDropsOnlyUnusableV6Stats(t *testing.T) {
+	s := NewScanner(defaultConfig(), func(string) bool { return false }, func() float64 { return 200 })
+	s.stats["2a06:98c1:3101::"] = &PrefixStat{Prefix: "2a06:98c1:3101::", Probes: 2, OK: 2, LastProbe: t0.Add(-8 * 24 * time.Hour)}
+	s.stats["2a06:98c1:3102::"] = &PrefixStat{Prefix: "2a06:98c1:3102::", Probes: 2, OK: 2, LastProbe: t0.Add(-6 * 24 * time.Hour)}
+	s.stats["198.18.0"] = &PrefixStat{Prefix: "198.18.0", Probes: 1, LastProbe: t0.Add(-400 * 24 * time.Hour)}
+	s.prune(t0)
+	if _, ok := s.stats["2a06:98c1:3101::"]; ok {
+		t.Fatal("a v6 statistic stale for 8 days must be dropped")
+	}
+	if _, ok := s.stats["2a06:98c1:3102::"]; !ok {
+		t.Fatal("a fresh v6 statistic must stay")
+	}
+	if _, ok := s.stats["198.18.0"]; !ok {
+		t.Fatal("v4 statistics are bounded and must stay however old")
+	}
+}

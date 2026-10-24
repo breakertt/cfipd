@@ -144,7 +144,10 @@ func (d *daemon) run(ctx context.Context) error {
 	defer tick.Stop()
 	snap := time.NewTicker(5 * time.Minute)
 	defer snap.Stop()
-	log.Printf("cfipd started, data=%s socket=%s", d.cfg.DataDir, d.cfg.Socket)
+	mem := time.NewTicker(time.Minute)
+	defer mem.Stop()
+	log.Printf("cfipd started, data=%s socket=%s memory_limit=%dMiB (0 = none)",
+		d.cfg.DataDir, d.cfg.Socket, tuneMemory(d.cfg))
 	for {
 		select {
 		case <-ctx.Done():
@@ -158,8 +161,11 @@ func (d *daemon) run(ctx context.Context) error {
 			d.apply(r)
 		case req := <-d.ctl:
 			d.handleCtl(req)
+		case <-mem.C:
+			tuneMemory(d.cfg)
 		case <-snap.C:
 			d.pool.pruneCandidates(time.Now())
+			d.scan.prune(time.Now())
 			if err := d.store.Save(d.pool, d.scan); err != nil {
 				log.Printf("save: %v", err)
 			}

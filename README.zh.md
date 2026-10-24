@@ -124,6 +124,7 @@ systemd 服务传入 `-config /etc/cfipd.json`，所以 `CFIPD_CONFIG_PATH` 不�
 | `promote_min_mbps` | 转正所需的最低吞吐量 | `30` |
 | `speed_recheck` | 每个 Active 带宽复测的间隔；`"0s"` 关闭复测 | `"12h"` |
 | `speed_gap` | 两次带宽下载之间的最短间隔；遇到 HTTP 429 至少暂停一小时 | `"15m"` |
+| `memory_limit_mb` | Go 软内存上限（MiB）；`0` 表示跟随主机剩余内存（当前用量加 `MemAvailable` 的四分之一，至少 8MiB） | `0` |
 
 完整配置见 [config.go](https://github.com/breakertt/cfipd/blob/main/cmd/cfipd/config.go)。
 直接运行默认使用 `/tmp/cfipd.sock`，Debian 包通过配置改为 `/run/cfipd/ctl.sock`。
@@ -199,7 +200,8 @@ TLS 握手和 HTTP 请求由客户端与 Cloudflare 处理。复用同一条 HTT
 
 ## 数据与运行限制
 
-- `state.json` 保存入口池、前缀反馈、调度时间和 PK 预算。`history.jsonl` 记录探测与事件，
+- `state.json` 保存入口池、前缀反馈、调度时间和 PK 预算。v4 前缀统计以内置 /24 列表为上限；
+  采样器不再使用的 v6 统计（7 天未探测）会被删除。`history.jsonl` 记录探测与事件，
   单段约 8MiB 时轮转，只保留最近三个归档，历史总共约 32MiB 以内；每删一个旧归档都写日志。
 - 测量反映 daemon 所在机器到配置探测域名的路径。换网络后保留旧状态，重新学习；
   程序没有城市或运营商特判。
@@ -209,6 +211,11 @@ TLS 握手和 HTTP 请求由客户端与 Cloudflare 处理。复用同一条 HTT
 - relay 承载基于 TCP 的 HTTPS，不支持基于 QUIC/UDP 的 HTTP/3。
   上游建连失败时会尝试其他 Active，已经建立的流若上游中断则无法挽救。
   在没有客户端流量且使用最慢默认检查间隔时，静默故障可能要约两分钟才被发现。
+- 入口池和前缀数据约占 1MB。daemon 常驻内存的大头是映射进来的二进制文件（约 7MB，
+  与 `cfipd web` 共享）和 Go 运行时的余量。默认的软内存上限跟随主机剩余内存，只在主机
+  内存紧张时收紧。小内存路由器上可设置 `memory_limit_mb`（例如 `12`），让运行时更紧凑，
+  代价是垃圾回收更频繁；环境变量 `GOMEMLIMIT` 优先于它。`cfipd web` 是单独的进程，
+  内存紧张时不要启用。`cfipd status` 显示 Go 当前用量和上限。
 - relay 和面板均无认证。限制监听地址或网络访问范围；面板保持回环监听，或只开放给可信
   网络。
 

@@ -59,6 +59,7 @@ func TestConfigTestRejectsBadFiles(t *testing.T) {
 		{"negative gap", `{"speed_gap": "-1m"}`, "speed_gap", true},
 		{"no colos", `{"allowed_colos": []}`, "allowed_colos", true},
 		{"bad url", `{"down_url": "speed.cloudflare.com/__down"}`, "down_url", true},
+		{"negative memory", `{"memory_limit_mb": -1}`, "memory_limit_mb", true},
 	} {
 		p := filepath.Join(dir, strings.ReplaceAll(tc.name, " ", "-")+".json")
 		if err := os.WriteFile(p, []byte(tc.body), 0o644); err != nil {

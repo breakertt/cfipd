@@ -136,6 +136,7 @@ It logs every problem that `cfipd test` reports.
 | `promote_min_mbps` | Minimum throughput required for promotion | `30` |
 | `speed_recheck` | Interval between bandwidth rechecks of each active; `"0s"` disables them | `"12h"` |
 | `speed_gap` | Minimum time between bandwidth downloads; an HTTP 429 answer pauses downloads for at least an hour | `"15m"` |
+| `memory_limit_mb` | Go soft memory limit in MiB; `0` follows the host's free memory (current use plus a quarter of `MemAvailable`, at least 8 MiB) | `0` |
 
 The full configuration is defined in
 [config.go](https://github.com/breakertt/cfipd/blob/main/cmd/cfipd/config.go). A direct run
@@ -231,6 +232,8 @@ new HTTPS connections; established sessions keep their existing upstream.
 ## Data and operational limits
 
 - `state.json` stores endpoint pools, prefix feedback, schedules, and PK budgets.
+  v4 prefix statistics are limited to the bundled /24 table. v6 statistics that
+  the sampler no longer uses (not probed for 7 days) are dropped.
   `history.jsonl` records probes and events; segments rotate at approximately
   8 MiB and only the newest three archives are kept, so history stays under
   about 32 MiB. Each pruned archive is logged.
@@ -246,6 +249,14 @@ new HTTPS connections; established sessions keep their existing upstream.
   connection attempt fails; it cannot rescue an established stream whose upstream
   dies. With no client traffic, a silent failure may take about two minutes to
   detect at the slowest default check interval.
+- Pool and prefix data take about 1 MB. Most of the daemon's resident memory is
+  the mapped binary (about 7 MB, shared with `cfipd web`) and Go runtime
+  headroom. By default the soft memory limit follows the host's free memory, so
+  it tightens only when the host runs short. On a small router, set
+  `memory_limit_mb` (for example `12`) to keep the runtime tighter at the cost of
+  more frequent garbage collection; the `GOMEMLIMIT` environment variable
+  overrides it. `cfipd web` is a separate process, so leave it off where memory
+  is tight. `cfipd status` shows the Go memory in use and the limit.
 - The relay and dashboard have no authentication. Restrict their bind addresses
   or network access; keep the dashboard on loopback or a trusted network.
 
