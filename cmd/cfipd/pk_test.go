@@ -327,3 +327,27 @@ func TestPKVerdictShowsIncumbentFailures(t *testing.T) {
 		t.Fatalf("ok=%v why=%q", ok, why)
 	}
 }
+
+// TestPKFloorWaivedWhenIncumbentIsUnderIt: on a link where the incumbent
+// itself measures under the promotion floor, the absolute floor cannot be met
+// by anyone, so the 80%-of-incumbent rule alone decides; with an incumbent at
+// or above the floor, the floor still applies.
+func TestPKFloorWaivedWhenIncumbentIsUnderIt(t *testing.T) {
+	for _, tc := range []struct {
+		chall, inc float64
+		swap       bool
+	}{
+		{25, 18, true},  // slow link: both under 30 Mbps
+		{15, 18, true},  // 83% of a sub-floor incumbent
+		{14, 18, false}, // 78%: under the relative rule
+		{25, 40, false}, // incumbent above the floor: the floor holds
+	} {
+		d, inc, sb := pkPairFixture(t)
+		d.pool.pk.ObserveUntil = t0.Add(-time.Hour)
+		d.applySpeed(jobResult{job: job{kind: jSpeed, ip: sb.Addr, peer: inc.Addr}, ok: true,
+			speed: SpeedResult{Mbps: tc.chall, Colo: "KIX"}, speed2: SpeedResult{Mbps: tc.inc, Colo: "HKG"}}, t0)
+		if swapped := sb.Role == RoleActive; swapped != tc.swap {
+			t.Errorf("challenger %v Mbps vs incumbent %v Mbps: swapped=%v, want %v", tc.chall, tc.inc, swapped, tc.swap)
+		}
+	}
+}

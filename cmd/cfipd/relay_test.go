@@ -197,12 +197,16 @@ func TestRelayFeedbackReachesPromotedActive(t *testing.T) {
 	}
 }
 
-// TestCopyCountedUsesPooledBuffer: relay copies reuse a pooled 8 KiB buffer
-// instead of allocating 32 KiB per direction per connection, and count bytes.
+// TestCopyCountedUsesPooledBuffer: relay copies reuse a pooled 16 KiB buffer
+// (one full TLS record) instead of allocating 32 KiB per direction per
+// connection, and count bytes.
 func TestCopyCountedUsesPooledBuffer(t *testing.T) {
 	payload := bytes.Repeat([]byte("x"), 64<<10)
 	r := bytes.NewReader(payload)
 	var n atomic.Int64
+	if got := len(*relayBufs.Get().(*[]byte)); got != 16<<10 {
+		t.Fatalf("relay buffer is %d bytes, want 16 KiB (one full TLS record)", got)
+	}
 	copyCounted(io.Discard, r, &n) // warm the pool
 	const runs = 64
 	runtime.GC()

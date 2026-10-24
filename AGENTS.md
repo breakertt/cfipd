@@ -28,7 +28,7 @@ Go 源码是 `cmd/cfipd/` 下的单个 main 包，下表中的源文件都在这
 | `ip.go` | 角色、健康状态、真实观测窗口、候选生命周期和分散约束 |
 | `probe.go` / `scanner.go` | HTTPS 探测、限时下载测速、地址采样和前缀反馈 |
 | `store.go` | 原子 JSON 快照（逐条流式写出）、旧格式迁移、JSONL 流水和轮转 |
-| `relay.go` | TCP 透传（共享 8KiB 复制缓冲）、供新连接读取的原子快照、真实流量反馈 |
+| `relay.go` | TCP 透传（共享 16KiB 复制缓冲）、供新连接读取的原子快照、真实流量反馈 |
 | `memory.go` | Go 软内存上限：固定值，或按主机剩余内存每分钟调整 |
 | `ctl.go` / `web.go` / `web.html` | Unix socket 控制接口和独立只读仪表盘 |
 | `packaging/` / `scripts/` / `.github/workflows/ci.yml` | systemd、Debian 包、构建和发布验收 |
@@ -41,7 +41,7 @@ Go 源码是 `cmd/cfipd/` 下的单个 main 包，下表中的源文件都在这
 - 每次物理探测保存真实时间、成功或失败，并准确计数。角色迁移不得伪造观测时间或丢弃
   失败样本；客户端连接统计与合成探测统计分开。HTTP 探测总耗时不能标为纯 TCP RTT。
 - 所有带宽下载（转正、PK、复测、替换、手动 promote）都经 `longJobBlocked` 串行，并保持
-  `speed_gap` 间隔；遇到 HTTP 429 暂停，没有 Active 时也暂停。PK 带宽阶段由发起 PK 时的
+  `speed_gap` 间隔（Active 不足一半时补位例外）；遇到 HTTP 429 一律暂停。PK 带宽阶段由发起 PK 时的
   判断覆盖（期间一直占着 pkRunning）。新增下载路径必须走同一个判断。
 - 调度按实际需求、收益和每条 IP 的截止时间驱动；容量与预算是上限，不是必须填满的配额。
   前缀 key、资格判据和架构映射各自只有一个权威实现，不复制逻辑。

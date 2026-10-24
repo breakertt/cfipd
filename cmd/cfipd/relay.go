@@ -29,9 +29,10 @@ type relayTarget struct {
 }
 
 // relayBufs holds the copy buffers of relay connections.
-var relayBufs = sync.Pool{New: func() any { b := make([]byte, 8<<10); return &b }}
+var relayBufs = sync.Pool{New: func() any { b := make([]byte, 16<<10); return &b }}
 
-// copyCounted copies src to dst through a pooled 8 KiB buffer and counts the
+// copyCounted copies src to dst through a pooled 16 KiB buffer (one full TLS
+// record per read) and counts the
 // bytes. Wrapping src hides net.TCPConn's WriteTo, which would allocate its
 // own 32 KiB buffer for every direction of every connection.
 func copyCounted(dst io.Writer, src io.Reader, n *atomic.Int64) {

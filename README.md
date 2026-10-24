@@ -121,7 +121,7 @@ installs this `/etc/cfipd.json`:
 Add a field from the table below to change its default. After an edit, run
 `cfipd test`. It reports a missing file, malformed JSON, unknown keys, and
 out-of-range values, and it exits with status 1 on an error. The daemon stops
-only for a file that it cannot parse. It starts with built-in defaults when the
+only for a file that it cannot read or parse. It starts with built-in defaults when the
 file is missing and ignores unknown keys, so a stale key cannot stop a service.
 It logs every problem that `cfipd test` reports.
 
@@ -135,8 +135,8 @@ It logs every problem that `cfipd test` reports.
 | `scan_v6_ratio` | Share of new-address discovery assigned to IPv6 | `0.2` |
 | `promote_min_mbps` | Minimum throughput required for promotion | `30` |
 | `speed_recheck` | Interval between bandwidth rechecks of each active; `"0s"` disables them | `"12h"` |
-| `speed_gap` | Minimum time between bandwidth downloads; an HTTP 429 answer pauses downloads for at least an hour | `"15m"` |
-| `memory_limit_mb` | Go soft memory limit in MiB; `0` follows the host's free memory (current use plus a quarter of `MemAvailable`, at least 8 MiB) | `0` |
+| `speed_gap` | Minimum time between the starts of bandwidth tests; an HTTP 429 answer pauses tests for at least an hour | `"15m"` |
+| `memory_limit_mb` | Go soft memory limit in MiB; `0` follows the host: current use plus a quarter of `MemAvailable`, with at least 4 MiB or a quarter of current use as headroom, and never under 8 MiB | `0` |
 
 The full configuration is defined in
 [config.go](https://github.com/breakertt/cfipd/blob/main/cmd/cfipd/config.go). A direct run
@@ -199,8 +199,9 @@ time by at least 20% and 30 ms without worsening p90. A failed incumbent probe
 counts as slower than any success, so an incumbent that fails half of its probes
 loses on availability alone. A second comparison of the same
 pair, at least five minutes later, confirms the result. A bandwidth comparison
-then requires at least 30 Mbps and 80% of the incumbent's measured throughput;
-full bandwidth comparisons are limited to two per day. A pair that loses the
+then requires 80% of the incumbent's measured throughput and at least 30 Mbps;
+the 30 Mbps floor is waived when the incumbent itself measures under it. Full
+bandwidth comparisons are limited to two per day. A pair that loses the
 bandwidth comparison is not compared again for a day; if a download fails, the
 pair waits an hour. During a new state's
 first 24 hours, PK records proposed swaps without applying them. Fault recovery
@@ -217,9 +218,9 @@ test. If it passes, the two endpoints swap roles.
 Bandwidth tests run one at a time and start at least 15 minutes apart
 (`speed_gap`) to stay under Cloudflare rate limits. A PK test downloads twice in
 a row, once for each endpoint. An HTTP 429 answer pauses all tests for at least
-an hour and does not count against the standby. While at least one active
-exists, the default gap allows at most 96 tests a day. With no active at all,
-fill does not wait for the gap, but the 429 pause still applies.
+an hour and does not count against the standby. When fewer than half of
+`active_count` actives remain, fill does not wait for the gap; the 429 pause
+still applies. Otherwise the default gap allows at most 96 tests a day.
 
 The implementation uses TCP passthrough to carry HTTPS. For each new client
 connection, it selects an Active IP with latency-based weights and opens a

@@ -162,7 +162,7 @@ func TestRateLimitPausesDownloads(t *testing.T) {
 	if time.Until(d.pool.speedPaused) < 59*time.Minute {
 		t.Fatalf("HTTP 429 must pause downloads for at least an hour, paused until %v", d.pool.speedPaused)
 	}
-	if d.longJobBlocked(time.Now()) == "" {
+	if d.longJobBlocked(time.Now(), false) == "" {
 		t.Fatal("long jobs must wait out the pause")
 	}
 }

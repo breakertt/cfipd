@@ -60,6 +60,17 @@ func TestConfigTestRejectsBadFiles(t *testing.T) {
 		{"no colos", `{"allowed_colos": []}`, "allowed_colos", true},
 		{"bad url", `{"down_url": "speed.cloudflare.com/__down"}`, "down_url", true},
 		{"negative memory", `{"memory_limit_mb": -1}`, "memory_limit_mb", true},
+		{"zero speed timeout", `{"speed_timeout": "0s"}`, "speed_timeout", true},
+		{"zero health interval", `{"health_interval": "0s"}`, "health_interval", true},
+		{"zero validation window", `{"validation_window": "0s"}`, "validation_window", true},
+		{"zero down fails", `{"down_fails": 0}`, "down_fails", true},
+		{"zero degraded fails", `{"degraded_fails": 0}`, "degraded_fails", true},
+		{"zero recover oks", `{"recover_oks": 0}`, "recover_oks", true},
+		{"zero hard fail down", `{"hard_fail_down": 0}`, "hard_fail_down", true},
+		{"zero colo bad down", `{"colo_bad_down": 0}`, "colo_bad_down", true},
+		{"zero validation obs", `{"validation_obs": 0}`, "validation_obs", true},
+		{"negative jitter", `{"promote_max_jitter_ms": -1}`, "promote_max_jitter_ms", true},
+		{"negative floor", `{"promote_min_mbps": -1}`, "promote_min_mbps", true},
 	} {
 		p := filepath.Join(dir, strings.ReplaceAll(tc.name, " ", "-")+".json")
 		if err := os.WriteFile(p, []byte(tc.body), 0o644); err != nil {

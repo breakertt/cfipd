@@ -59,7 +59,7 @@ type pkPending struct {
 // one per 30m; a pending confirmation round follows its own due time. Failed
 // pairs back off instead of retriggering on unchanged evidence.
 func (d *daemon) evalPK(now time.Time) {
-	if d.longJobBlocked(now) != "" {
+	if d.longJobBlocked(now, false) != "" {
 		return
 	}
 	sb, worst := d.nextPKPair(now)
@@ -257,8 +257,11 @@ func (d *daemon) applySpeed(r jobResult, now time.Time) {
 	if d.validSpeed(r.speed2) {
 		d.pool.recordSpeed(inc, r.speed2.Mbps, now)
 	}
+	// The absolute floor is waived when the incumbent itself measures under
+	// it: on such a link nobody can meet it, and the 80% rule still holds.
+	floor := d.cfg.PromoteMinMbps
 	win := d.validSpeed(r.speed) && d.validSpeed(r.speed2) &&
-		r.speed.Mbps >= d.cfg.PromoteMinMbps && r.speed2.Mbps > 0 &&
+		(r.speed.Mbps >= floor || r.speed2.Mbps < floor) && r.speed2.Mbps > 0 &&
 		r.speed.Mbps >= 0.8*r.speed2.Mbps &&
 		d.pool.swapDiverse(sb, inc)
 	d.store.Log(map[string]any{"type": "pk_speed", "challenger": r.ip, "incumbent": r.peer,

@@ -73,6 +73,10 @@ func main() {
 		source = "built-in defaults"
 	}
 	if os.Args[1] == "test" {
+		if fs.NArg() > 0 {
+			fmt.Fprintln(os.Stderr, "cfipd test takes no arguments; name the file with -config PATH")
+			os.Exit(2)
+		}
 		if _, err := loadConfig(*cfgPath, true); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)

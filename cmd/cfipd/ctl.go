@@ -175,7 +175,7 @@ func (d *daemon) handleCtl(req ctlRequest) {
 		ip := d.pool.get(req.arg)
 		if ip == nil {
 			rep.err = "unknown ip"
-		} else if why := d.longJobBlocked(now); why != "" {
+		} else if why := d.longJobBlocked(now, true); why != "" {
 			rep.err = why
 		} else if ip.Role != RoleStandby {
 			rep.err = "only a standby can be promoted"

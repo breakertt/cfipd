@@ -13,10 +13,12 @@ import (
 
 // memoryLimit returns the Go soft memory limit to apply, or 0 to leave the
 // runtime alone. A configured memory_limit_mb is fixed. Otherwise the limit
-// follows the host: the memory the process uses now plus a quarter of
-// MemAvailable, at least 8 MiB. Under memory pressure the limit shrinks, and
-// the runtime collects harder and returns memory to the system; with plenty
-// free it stays out of the way. GOMEMLIMIT in the environment always wins.
+// follows the host: the memory the process uses now plus a headroom of a
+// quarter of MemAvailable, but at least 4 MiB and a quarter of the current
+// use so the collector never runs without room, and never under 8 MiB. Under
+// memory pressure the limit shrinks, and the runtime collects harder and
+// returns memory to the system; with plenty free it stays out of the way.
+// GOMEMLIMIT in the environment always wins.
 func memoryLimit(cfgMB int, envSet bool, inUse, avail uint64, ok bool) int64 {
 	switch {
 	case envSet:
@@ -26,7 +28,7 @@ func memoryLimit(cfgMB int, envSet bool, inUse, avail uint64, ok bool) int64 {
 	case !ok:
 		return 0
 	}
-	return max(8<<20, int64(inUse+avail/4))
+	return max(8<<20, int64(inUse+max(avail/4, 4<<20, inUse/4)))
 }
 
 // parseMemAvailable reads MemAvailable from /proc/meminfo text.

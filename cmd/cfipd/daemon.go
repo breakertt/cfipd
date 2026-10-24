@@ -361,7 +361,7 @@ func (d *daemon) schedule(now time.Time) {
 	// Hard-failure fill has priority; PK may still improve a pool that fill
 	// cannot complete.
 	filling := false
-	if d.longJobBlocked(now) == "" && len(d.pool.actives()) < cfg.ActiveCount {
+	if d.longJobBlocked(now, true) == "" && len(d.pool.actives()) < cfg.ActiveCount {
 		filling = d.fillActive(now)
 	}
 	if !filling {
@@ -376,9 +376,10 @@ func (d *daemon) schedule(now time.Time) {
 // longJobBlocked reports why no promotion, PK, recheck or replacement may
 // start now, or "" if one may. One long job runs at a time, so bandwidth
 // downloads never overlap; tests also start SpeedGap apart and pause after
-// HTTP 429 to stay under Cloudflare rate limits. With no active at all, the
-// relay cannot serve, so fill does not wait for the gap; the 429 pause holds.
-func (d *daemon) longJobBlocked(now time.Time) string {
+// HTTP 429 to stay under Cloudflare rate limits. A fill with fewer than half
+// of active_count left does not wait for the gap, since the relay is nearly
+// empty; the 429 pause holds for every job.
+func (d *daemon) longJobBlocked(now time.Time, fill bool) string {
 	switch {
 	case d.promoting:
 		return "a promotion test is running"
@@ -388,7 +389,7 @@ func (d *daemon) longJobBlocked(now time.Time) string {
 		return "a bandwidth recheck is running"
 	case now.Before(d.pool.speedPaused):
 		return "bandwidth downloads paused after HTTP 429 until " + d.pool.speedPaused.Format(time.RFC3339)
-	case now.Before(d.pool.speedNext) && len(d.pool.actives()) > 0:
+	case now.Before(d.pool.speedNext) && !(fill && 2*len(d.pool.actives()) < d.cfg.ActiveCount):
 		return "next bandwidth download allowed at " + d.pool.speedNext.Format(time.RFC3339)
 	}
 	return ""

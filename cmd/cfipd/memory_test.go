@@ -6,8 +6,9 @@ import (
 )
 
 // TestMemoryLimitPolicy: a configured limit is fixed; otherwise the limit is
-// the current use plus a quarter of MemAvailable, at least 8 MiB; GOMEMLIMIT
-// or an unreadable MemAvailable leaves the runtime alone.
+// the current use plus a headroom of a quarter of MemAvailable, but at least
+// 4 MiB and a quarter of the current use, and never under 8 MiB; GOMEMLIMIT or
+// an unreadable MemAvailable leaves the runtime alone.
 func TestMemoryLimitPolicy(t *testing.T) {
 	const mib = 1 << 20
 	for _, tc := range []struct {
@@ -21,6 +22,8 @@ func TestMemoryLimitPolicy(t *testing.T) {
 		{"env wins", 16, true, true, 10 * mib, 400 * mib, 0},
 		{"auto", 0, false, true, 10 * mib, 40 * mib, 20 * mib},
 		{"auto floor", 0, false, true, 4 * mib, 8 * mib, 8 * mib},
+		{"tiny available", 0, false, true, 12 * mib, 2 * mib, 16 * mib},
+		{"large use", 0, false, true, 40 * mib, 0, 50 * mib},
 		{"no meminfo", 0, false, false, 10 * mib, 0, 0},
 	} {
 		if got := memoryLimit(tc.cfgMB, tc.env, tc.inUse, tc.avail, tc.ok); got != tc.want {

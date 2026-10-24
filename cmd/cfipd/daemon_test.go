@@ -460,3 +460,29 @@ func TestRateLimitPauseHoldsWithoutActives(t *testing.T) {
 		t.Fatal("an endpoint-side 429 must not back the standby off")
 	}
 }
+
+// TestFillSkipsGapWhenUnderHalf: with fewer than half of active_count left,
+// fill does not wait for the download gap (the relay is nearly empty), while
+// other long jobs still do; the HTTP 429 pause holds for everyone.
+func TestFillSkipsGapWhenUnderHalf(t *testing.T) {
+	d := testDaemon(t)
+	a := sinActive("198.18.0.1", 700)
+	d.pool.ips[a.Addr] = a // 1 of 3
+	d.pool.speedNext = t0.Add(5 * time.Minute)
+	if why := d.longJobBlocked(t0, true); why != "" {
+		t.Fatalf("fill with 1 of 3 actives must not wait for the gap: %s", why)
+	}
+	if d.longJobBlocked(t0, false) == "" {
+		t.Fatal("other long jobs must still wait for the gap")
+	}
+	b := sinActive("198.18.1.1", 700)
+	d.pool.ips[b.Addr] = b // 2 of 3
+	if d.longJobBlocked(t0, true) == "" {
+		t.Fatal("fill with 2 of 3 actives must wait for the gap")
+	}
+	d.pool.ips = map[string]*IP{a.Addr: a}
+	d.pool.speedPaused = t0.Add(time.Hour)
+	if d.longJobBlocked(t0, true) == "" {
+		t.Fatal("the HTTP 429 pause must hold even for an urgent fill")
+	}
+}

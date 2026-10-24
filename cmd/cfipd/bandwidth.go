@@ -11,7 +11,7 @@ import (
 // measured: due at once). It waits for the long-job slot and the download
 // gap, so it never overlaps another bandwidth download.
 func (d *daemon) recheckBandwidth(now time.Time) {
-	if d.cfg.SpeedRecheck.Duration <= 0 || d.longJobBlocked(now) != "" {
+	if d.cfg.SpeedRecheck.Duration <= 0 || d.longJobBlocked(now, false) != "" {
 		return
 	}
 	for _, a := range d.pool.actives() {
@@ -70,7 +70,7 @@ func (d *daemon) applyRecheck(r jobResult, ip *IP, now time.Time) {
 // below-floor sample triggers at most one attempt, so downloads stay bounded
 // by SpeedRecheck.
 func (d *daemon) replaceLowBandwidth(now time.Time) {
-	if d.longJobBlocked(now) != "" {
+	if d.longJobBlocked(now, false) != "" {
 		return
 	}
 	var low *IP
