@@ -1,0 +1,192 @@
+package main
+
+import (
+	"fmt"
+	"testing"
+	"time"
+)
+
+func TestPKPassContract(t *testing.T) {
+	cfg := defaultConfig()
+	mk := func(chall, inc []float64, co, io_ int) *pkRun {
+		return &pkRun{challRTT: chall, incRTT: inc, challOK: co, incOK: io_}
+	}
+	eight := func(v float64) []float64 {
+		r := make([]float64, 8)
+		for i := range r {
+			r[i] = v
+		}
+		return r
+	}
+	if ok, _ := mk(eight(200), eight(300), 8, 8).pass(cfg); !ok {
+		t.Fatal("200 vs 300 should pass (100ms > 30ms, 33% > 20%)")
+	}
+	if ok, _ := mk(eight(280), eight(300), 8, 8).pass(cfg); ok {
+		t.Fatal("280 vs 300: 20ms improvement must fail the 30ms rule")
+	}
+	if ok, _ := mk(eight(250), eight(300), 8, 8).pass(cfg); ok {
+		t.Fatal("250 vs 300: 17% improvement must fail the 20% rule")
+	}
+	badTail := append(eight(200)[:6], 500, 500)
+	if ok, _ := mk(badTail, eight(300), 8, 8).pass(cfg); ok {
+		t.Fatal("worse p90 must fail")
+	}
+	if ok, _ := mk(eight(200), eight(300), 5, 8).pass(cfg); ok {
+		t.Fatal("undersampled challenger must fail")
+	}
+}
+
+func TestPickPKPairOpportunity(t *testing.T) {
+	d := testDaemon(t)
+	for i := range 3 {
+		a := &IP{Addr: fmt.Sprintf("1.1.1.%d", i+1), Role: RoleActive, State: StateHealthy, Colo: "NRT"}
+		for range 4 {
+			a.Win = append(a.Win, Obs{OK: true, RTT: 200, Colo: "NRT", T: t0})
+		}
+		d.pool.ips[a.Addr] = a
+	}
+	// worst active: median 300
+	worst := d.pool.ips["1.1.1.3"]
+	worst.Win = []Obs{{OK: true, RTT: 300, Colo: "NRT", T: t0}, {OK: true, RTT: 300, Colo: "NRT", T: t0},
+		{OK: true, RTT: 300, Colo: "NRT", T: t0}, {OK: true, RTT: 300, Colo: "NRT", T: t0}}
+	sb := &IP{Addr: "2.2.2.2", Role: RoleStandby, Colo: "SIN", LastSeen: t0}
+	for range 4 {
+		sb.Win = append(sb.Win, Obs{OK: true, RTT: 200, Colo: "SIN", T: t0})
+	}
+	d.pool.ips[sb.Addr] = sb
+	gotSB, gotInc := d.pool.pickPKPair(t0)
+	if gotSB != sb || gotInc != worst {
+		t.Fatalf("expected (%s,%s), got (%v,%v)", sb.Addr, worst.Addr, gotSB, gotInc)
+	}
+	// stale standby must not challenge
+	sb.LastSeen = t0.Add(-time.Hour)
+	if s, _ := d.pool.pickPKPair(t0); s != nil {
+		t.Fatal("stale standby must be refreshed before PK, not trusted")
+	}
+	// small advantage must not trigger
+	sb.LastSeen = t0
+	sb.Win = []Obs{{OK: true, RTT: 290, Colo: "SIN", T: t0}, {OK: true, RTT: 290, Colo: "SIN", T: t0},
+		{OK: true, RTT: 290, Colo: "SIN", T: t0}, {OK: true, RTT: 290, Colo: "SIN", T: t0}}
+	if s, _ := d.pool.pickPKPair(t0); s != nil {
+		t.Fatal("10ms advantage must not trigger PK")
+	}
+}
+
+func TestPKObserveOnlyWindow(t *testing.T) {
+	d := testDaemon(t)
+	d.pool.pk = &pkPersist{ObserveUntil: t0.Add(24 * time.Hour)}
+	// full pool: 3 actives, incumbent among them
+	for _, a := range []string{"1.1.1.2", "1.1.1.3"} {
+		d.pool.ips[a] = &IP{Addr: a, Role: RoleActive, State: StateHealthy, Colo: "SIN"}
+	}
+	inc := &IP{Addr: "1.1.1.1", Role: RoleActive, State: StateHealthy, Colo: "NRT"}
+	sb := &IP{Addr: "2.2.2.2", Role: RoleStandby, Colo: "KIX"}
+	d.pool.ips[inc.Addr], d.pool.ips[sb.Addr] = inc, sb
+	mk := func() jobResult {
+		return jobResult{job: job{kind: jSpeed, ip: sb.Addr, peer: inc.Addr, gen: d.pool.gen},
+			ok: true, speed: SpeedResult{Mbps: 100}, speed2: SpeedResult{Mbps: 90}}
+	}
+	d.applySpeed(mk(), t0)
+	if sb.Role != RoleStandby || inc.Role != RoleActive {
+		t.Fatal("observe-only window must log decisions without swapping")
+	}
+	d.pool.pk.ObserveUntil = t0.Add(-time.Hour)
+	r := mk()
+	r.job.gen = d.pool.gen // gen unchanged by observe-only decision
+	d.applySpeed(r, t0)
+	if sb.Role != RoleActive || inc.Role != RoleStandby {
+		t.Fatal("after warm-up a confirmed winner should swap")
+	}
+}
+
+// TestPKPendingAgeNotResetByEarlyWin: an early second win must not postpone
+// the confirmation due time.
+func TestPKPendingAgeNotResetByEarlyWin(t *testing.T) {
+	d, inc, sb := pkPairFixture(t)
+	mk := func() jobResult {
+		r := jobResult{job: job{kind: jPK, ip: sb.Addr, peer: inc.Addr, gen: d.pool.gen}, ok: true, pk: &pkRun{}}
+		for range 8 {
+			r.pk.challRTT = append(r.pk.challRTT, 150)
+			r.pk.incRTT = append(r.pk.incRTT, 400)
+		}
+		r.pk.challOK, r.pk.incOK, r.pk.challColo, r.pk.incColo = 8, 8, "KIX", "HKG"
+		return r
+	}
+	d.applyPK(mk(), t0)
+	if d.pkPending == nil || !d.pkPending.At.Equal(t0) {
+		t.Fatal("first win must arm a pending pair")
+	}
+	d.applyPK(mk(), t0.Add(time.Minute))
+	if !d.pkPending.At.Equal(t0) {
+		t.Fatal("early second win must not reset the first-win age")
+	}
+	d.applyPK(mk(), t0.Add(6*time.Minute))
+	if d.pkPending != nil || !d.pkRunning {
+		t.Fatal("second win after 5min must confirm and dispatch the bandwidth stage")
+	}
+	if d.pool.pk.BWUsed != 1 {
+		t.Fatal("confirmed PK must consume the daily bandwidth budget")
+	}
+}
+
+func TestPKConfirmationKeepsOriginalPairWhenRankingChanges(t *testing.T) {
+	d, inc, sb := pkPairFixture(t)
+	d.pkPending = &pkPending{Challenger: sb.Addr, Incumbent: inc.Addr, At: t0}
+	d.pkLastEval = t0
+	better := &IP{Addr: "198.18.4.1", Role: RoleStandby, Colo: "KIX", LastSeen: t0, Win: append([]Obs(nil), sb.Win...)}
+	for i := range better.Win {
+		better.Win[i].RTT = 100
+	}
+	d.pool.ips[better.Addr] = better
+	// A different active is now worst, but the original pair still qualifies.
+	for i := range d.pool.ips["198.18.1.1"].Win {
+		d.pool.ips["198.18.1.1"].Win[i].RTT = 500
+	}
+	gotSB, gotInc := d.nextPKPair(t0.Add(6 * time.Minute))
+	if gotSB != sb || gotInc != inc {
+		t.Fatalf("confirmation must repeat its original pair, got (%v, %v)", gotSB, gotInc)
+	}
+}
+
+func TestInvalidPKPendingPairDoesNotBypassElectiveLimit(t *testing.T) {
+	d, inc, sb := pkPairFixture(t)
+	d.pkPending = &pkPending{Challenger: "198.18.9.1", Incumbent: inc.Addr, At: t0}
+	d.pkLastEval = t0
+	if challenger, _ := d.nextPKPair(t0.Add(6 * time.Minute)); challenger != nil {
+		t.Fatal("expired confirmation must not authorize a new pair before 30min")
+	}
+	if d.pkPending != nil {
+		t.Fatal("invalid pending pair must be cleared")
+	}
+	// Once the elective deadline arrives, fresh evidence can start a new pair.
+	sb.LastSeen = t0.Add(30 * time.Minute)
+	if challenger, incumbent := d.nextPKPair(t0.Add(30 * time.Minute)); challenger != sb || incumbent != inc {
+		t.Fatal("new pairs must remain possible at the ordinary elective deadline")
+	}
+}
+
+func TestPKCanImproveDegradedButAvailableIncumbent(t *testing.T) {
+	d, inc, sb := pkPairFixture(t)
+	inc.State = StateDegraded
+	gotSB, gotInc := d.pool.pickPKPair(t0)
+	if gotSB != sb || gotInc != inc {
+		t.Fatalf("PK should target the slow usable incumbent, got challenger=%v incumbent=%v", gotSB, gotInc)
+	}
+}
+
+func TestPKCannotQualifyWithFailedHTTPChecks(t *testing.T) {
+	r := &pkRun{challOK: 6, incOK: 8, challRTT: []float64{100, 100, 100, 100, 100, 100}, incRTT: []float64{300, 300, 300, 300, 300, 300, 300, 300}}
+	if ok, _ := r.pass(defaultConfig()); ok {
+		t.Fatal("a final-qualified challenger cannot silently accept 2 failed/wrong-colo checks out of 8")
+	}
+}
+
+func TestMissingBandwidthReferenceIsNotAWin(t *testing.T) {
+	d, inc, sb := pkPairFixture(t)
+	d.pool.pk.ObserveUntil = t0.Add(-time.Hour)
+	d.applySpeed(jobResult{job: job{kind: jSpeed, ip: sb.Addr, peer: inc.Addr}, ok: true,
+		speed: SpeedResult{Mbps: 100, Bytes: 1024, Colo: "KIX"}, speed2: SpeedResult{Err: "status 403"}}, t0)
+	if sb.Role != RoleStandby || inc.Role != RoleActive {
+		t.Fatal("an unavailable incumbent bandwidth reference cannot authorize an elective swap")
+	}
+}

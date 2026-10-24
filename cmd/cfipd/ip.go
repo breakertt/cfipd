@@ -450,6 +450,22 @@ func (p *Pool) needCandidates() bool {
 	return false
 }
 
+// credibleImprovement reports whether this candidate alone looks like a
+// meaningful win over the worst active.
+func (p *Pool) credibleImprovement(c *IP) bool {
+	worst := 0.0
+	for _, a := range p.actives() {
+		if m := a.medianRTT(); m > worst {
+			worst = m
+		}
+	}
+	if worst <= 0 {
+		return false
+	}
+	m := c.medianRTT()
+	return m > 0 && m <= worst-30 && m <= 0.8*worst
+}
+
 // applyCandidate records one truthful validation observation. After
 // ValidationObs samples the round concludes: graduate to standby if useful,
 // otherwise leave the pool. No endless resets.

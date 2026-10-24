@@ -16,12 +16,14 @@ cfipd 是 Go 标准库实现的 Cloudflare HTTPS relay、IP 优选 daemon 和只
 对使用者描述 HTTPS 用途；实现层是 L4 TCP 透传，TLS 在客户端与 Cloudflare 之间端到端
 建立，不在 relay 终止，也不实现 HTTP CONNECT 代理协议。
 
-Go 源码是 `cmd/cfipd/` 下的单个 main 包，下表中的源文件都在这个目录。
+Go 源码是 `cmd/cfipd/` 下的单个 main 包，下表中的源文件都在这个目录。测试按被测文件
+命名为 `<源文件>_test.go`，共享 fixture 放在 `fixtures_test.go`。
 
 | 文件 | 职责 |
 |---|---|
 | `main.go` / `config.go` | CLI、版本信息、配置加载和默认值 |
-| `daemon.go` | 单事件循环、任务调度、异步结果应用、转正和 PK |
+| `daemon.go` | 单事件循环、任务调度、异步结果应用和转正 |
+| `pk.go` | 择优 PK：挑选配对、同窗比较、独立确认和带宽对照 |
 | `ip.go` | 角色、健康状态、真实观测窗口、候选生命周期和分散约束 |
 | `probe.go` / `scanner.go` | HTTPS 探测、限时下载测速、地址采样和前缀反馈 |
 | `store.go` | 原子 JSON 快照、旧格式迁移、JSONL 流水和轮转 |
