@@ -249,8 +249,11 @@ func speedTest(ctx context.Context, cfg *Config, ip string) SpeedResult {
 	if res.Dur > 0 {
 		res.Mbps = float64(n) * 8 / res.Dur.Seconds() / 1e6
 	}
-	if rerr != nil && !errors.Is(rerr, context.DeadlineExceeded) {
+	switch {
+	case rerr != nil && !errors.Is(rerr, context.DeadlineExceeded):
 		res.Err = rerr.Error()
+	case n == 0: // the timeout ends a slow transfer, but no data is no sample
+		res.Err = "no data before the timeout"
 	}
 	return res
 }

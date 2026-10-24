@@ -426,6 +426,7 @@ func (p *Pool) bestActiveMedian() float64 {
 // cut an active over rttLimit or confirmed under promote_min_mbps, and PK only
 // scores a challenger that is already faster and reaches the bandwidth floor.
 func score(w, rttMs, mbps float64) float64 {
+	w = min(max(w, 0), 1) // a lenient config load only warns about the range
 	return math.Pow(rttMs, w-1) * math.Pow(mbps, w)
 }
 

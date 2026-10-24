@@ -355,7 +355,8 @@ func TestClientTableEvictsIdleOldest(t *testing.T) {
 	var ct clientTable
 	busy := ct.open("busy", t0)
 	for i := 1; i < maxClients; i++ {
-		ct.done(ct.open(fmt.Sprint("idle", i), t0.Add(time.Duration(i)*time.Second)), false)
+		at := t0.Add(time.Duration(i) * time.Second)
+		ct.done(ct.open(fmt.Sprint("idle", i), at), false, at)
 	}
 	ct.open("new", t0.Add(time.Hour))
 	seen := map[string]bool{}
@@ -366,5 +367,15 @@ func TestClientTableEvictsIdleOldest(t *testing.T) {
 		t.Fatalf("after eviction: %d clients, busy=%v new=%v idle1=%v idle2=%v",
 			len(seen), seen["busy"], seen["new"], seen["idle1"], seen["idle2"])
 	}
-	ct.done(busy, false)
+	ct.done(busy, false, t0.Add(time.Hour))
+}
+
+// A client is last seen when its latest connection opened or closed, so a
+// long connection that just ended does not show as hours old.
+func TestClientLastSeenAtClose(t *testing.T) {
+	var ct clientTable
+	ct.done(ct.open("192.0.2.1", t0), false, t0.Add(3*time.Hour))
+	if c := ct.list()[0]; c.Last != t0.Add(3*time.Hour).Format(time.RFC3339) {
+		t.Fatalf("last seen %s, want the close time", c.Last)
+	}
 }

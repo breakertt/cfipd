@@ -31,12 +31,6 @@ func (r *pkRun) pass(cfg *Config) (bool, string) {
 	}
 	inc := r.incSamples(cfg)
 	challMed, incMed, challP90, incP90 := median(r.challRTT), median(inc), pct90(r.challRTT), pct90(inc)
-	show := func(v float64) string {
-		if math.IsInf(v, 1) {
-			return "failed"
-		}
-		return fmt.Sprintf("%.0fms", v)
-	}
 	if challMed > incMed-30 || challMed > 0.8*incMed {
 		return false, fmt.Sprintf("median %.0fms vs %s: improvement < 30ms/20%%", challMed, show(incMed))
 	}
@@ -45,6 +39,14 @@ func (r *pkRun) pass(cfg *Config) (bool, string) {
 	}
 	return true, fmt.Sprintf("median %s -> %.0fms, p90 %s -> %.0fms, incumbent %d/%d ok",
 		show(incMed), challMed, show(incP90), challP90, r.incOK, cfg.PromoteProbes)
+}
+
+// show formats a probe time; +Inf stands for failed probes.
+func show(v float64) string {
+	if math.IsInf(v, 1) {
+		return "failed"
+	}
+	return fmt.Sprintf("%.0fms", v)
 }
 
 // incSamples returns the incumbent's probe times with each failed probe as
@@ -290,10 +292,10 @@ func (d *daemon) applySpeed(r jobResult, now time.Time) {
 			hold = 24 * time.Hour
 		}
 		d.pkFailUntil[r.ip+">"+r.peer] = now.Add(hold)
-		d.pkLastVerdict = fmt.Sprintf("%s vs %s: %.0fms %.1fMbps vs %.0fms %.1fMbps, no swap",
-			r.ip, r.peer, challMed, r.speed.Mbps, incMed, r.speed2.Mbps)
-		log.Printf("PK %s score lower, under the bandwidth floor, or inconclusive: %.0fms %.1fMbps (%s) vs incumbent %.0fms %.1fMbps (%s)",
-			r.ip, challMed, r.speed.Mbps, r.speed.Err, incMed, r.speed2.Mbps, r.speed2.Err)
+		d.pkLastVerdict = fmt.Sprintf("%s vs %s: %s %.1fMbps vs %s %.1fMbps, no swap",
+			r.ip, r.peer, show(challMed), r.speed.Mbps, show(incMed), r.speed2.Mbps)
+		log.Printf("PK %s score lower, under the bandwidth floor, or inconclusive: %s %.1fMbps (%s) vs incumbent %s %.1fMbps (%s)",
+			r.ip, show(challMed), r.speed.Mbps, r.speed.Err, show(incMed), r.speed2.Mbps, r.speed2.Err)
 		return
 	}
 	if now.Before(d.pool.pk.ObserveUntil) {

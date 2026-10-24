@@ -33,10 +33,12 @@ control (talks to the running daemon over the unix socket):
   quarantine <ip>         cool an IP down (bounded candidate cooldown)
   scan                    trigger one discovery scan now
   relay                   relay traffic stats per active
+  clients                 relay connections and traffic per client IP
   import <file>           seed candidates from cfst result.csv or IP list
 
 web dashboard (read-only, separate process; talks to the daemon over the unix socket):
-  web [-listen addr]      serve the dashboard + JSON API (default 127.0.0.1:8080)
+  web [-listen addr]      serve the dashboard + JSON API (default 127.0.0.1:8080);
+                          web_password in the config requires a password
 
 flags: -config <path> (default: $CFIPD_CONFIG_PATH, else ./cfipd.json or
        /etc/cfipd.json if present, else built-in defaults)

@@ -41,7 +41,7 @@ type clientTable struct {
 
 type clientStat struct {
 	total, open, fails int64     // guarded by clientTable.mu
-	last               time.Time // guarded by clientTable.mu
+	last               time.Time // latest open or close; guarded by clientTable.mu
 	up, down           atomic.Int64
 }
 
@@ -91,10 +91,11 @@ func (t *clientTable) evictIdle() bool {
 	return old != nil
 }
 
-func (t *clientTable) done(c *clientStat, failed bool) {
+func (t *clientTable) done(c *clientStat, failed bool, now time.Time) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	c.open--
+	c.last = now
 	if failed {
 		c.fails++
 	}
@@ -232,7 +233,7 @@ func (d *daemon) handleRelayConn(c net.Conn) {
 		host = c.RemoteAddr().String()
 	}
 	cs, served := d.clients.open(host, time.Now()), false
-	defer func() { d.clients.done(cs, !served) }()
+	defer func() { d.clients.done(cs, !served, time.Now()) }()
 	ts, _ := d.relaySnap.Load().([]relayTarget)
 	if len(ts) == 0 {
 		return

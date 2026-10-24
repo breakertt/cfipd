@@ -329,6 +329,27 @@ func TestPKVerdictShowsIncumbentFailures(t *testing.T) {
 	}
 }
 
+// TestPKVerdictShowsFailedIncumbent: an incumbent that failed half of its
+// paired probes has no median; the verdict says "failed", not "+Infms".
+func TestPKVerdictShowsFailedIncumbent(t *testing.T) {
+	d, inc, sb := pkPairFixture(t)
+	d.pool.pk.ObserveUntil = t0.Add(-time.Hour)
+	d.pkLastRun = &pkRun{challOK: 8, incOK: 4, challRTT: []float64{200}, incRTT: []float64{260, 260, 260, 260}}
+	d.applySpeed(jobResult{job: job{kind: jSpeed, ip: sb.Addr, peer: inc.Addr}, ok: true,
+		speed: SpeedResult{Mbps: 20, Colo: "KIX"}, speed2: SpeedResult{Mbps: 500, Colo: "HKG"}}, t0)
+	if strings.Contains(d.pkLastVerdict, "Inf") || !strings.Contains(d.pkLastVerdict, "failed") {
+		t.Fatalf("verdict %q", d.pkLastVerdict)
+	}
+}
+
+// TestScoreClampsWeight: a bandwidth_weight outside [0, 1] that a lenient
+// load let through must not invert the ranking.
+func TestScoreClampsWeight(t *testing.T) {
+	if score(2, 200, 50) > score(2, 100, 50) || score(-1, 100, 50) != score(0, 100, 50) {
+		t.Fatal("score must clamp the weight to [0, 1]")
+	}
+}
+
 // TestPKBandwidthStageUsesScore: the bandwidth stage swaps when the
 // challenger's score (rtt^-(1-w) * Mbps^w) on the fresh paired medians beats
 // the incumbent's. The promotion floor still applies, except on a link where

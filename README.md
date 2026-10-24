@@ -226,9 +226,9 @@ w is `bandwidth_weight`. The score uses ratios, so the units cancel. With the
 default w of 0.4, 1% less probe time counts 1.5 times as much as 1% more bandwidth.
 With w = 0, only probe time counts. With w = 1, only bandwidth counts. Floors come
 before the score, so neither side can drop too far for the other. In PK, the
-challenger is always faster and must reach 30 Mbps, so the score never trades
-probe time away. With the default w, a challenger that is 20% faster needs at
-least 72% of the incumbent's bandwidth. In the relay weights, an active over 1.3
+challenger is always faster and is held to the bandwidth floor above, so the
+score never trades probe time away. With the default w, a challenger that is 20%
+faster needs about 72% of the incumbent's bandwidth. In the relay weights, an active over 1.3
 times the probe time of the best active keeps a quarter of its weight.
 
 Each active gets a new bandwidth measurement about every 12 hours
@@ -237,9 +237,10 @@ confirmation measurement about an hour later. After two such results in a row,
 and while another active measures at least 30 Mbps, the active continues to
 serve with a quarter of its normal relay weight. Each low result from then on
 gives the best standby that fits one full promotion test. If it passes, the two
-endpoints swap roles. Where no active reaches 30 Mbps, low results change
-nothing. In the relay weights, a sample under 30 Mbps counts as 30 Mbps, so only a
-confirmed result cuts more.
+endpoints swap roles. While another active reaches 30 Mbps, the relay weights
+count a sample under 30 Mbps as 30 Mbps, so only a confirmed result cuts more.
+Where no active reaches 30 Mbps, low results start no replacement, and the relay
+weights use the measured bandwidth.
 
 Bandwidth tests run one at a time and start at least 15 minutes apart
 (`speed_gap`) to stay under Cloudflare rate limits. A PK test downloads twice in
