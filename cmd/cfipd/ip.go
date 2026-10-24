@@ -419,6 +419,16 @@ func (p *Pool) bestActiveMedian() float64 {
 	return best
 }
 
+// score is the figure of merit of an endpoint, higher is better:
+// rtt^-(1-w) * mbps^w with w = bandwidth_weight. In log terms a 1% change of
+// probe time or bandwidth moves it by (1-w)% or w%, so the units cancel and
+// no pool statistic is needed. Callers apply the floors first: relay weights
+// cut an active over rttLimit or confirmed under promote_min_mbps, and PK only
+// scores a challenger that is already faster and reaches the bandwidth floor.
+func score(w, rttMs, mbps float64) float64 {
+	return math.Pow(rttMs, w-1) * math.Pow(mbps, w)
+}
+
 // rttLimit floats with reality: 1.3x the best active. With no active reference
 // there is no RTT veto at all — cold start must not reject every usable node.
 func (p *Pool) rttLimit() float64 {

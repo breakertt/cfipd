@@ -71,8 +71,10 @@ func TestBelowFloorNeedsConfirmation(t *testing.T) {
 	if until := time.Until(slow.SpeedDue); until > time.Hour || until < 45*time.Minute {
 		t.Fatalf("the confirmation recheck must come about an hour later, got %v", until)
 	}
-	if w := weights(); w[slow.Addr] != w[peer.Addr] {
-		t.Fatalf("an unconfirmed low sample must not cut the relay weight, got %v", w)
+	// Under the floor the score counts the floor; only confirmation cuts more.
+	atFloor := score(d.cfg.BandwidthWeight, 300, d.cfg.PromoteMinMbps)
+	if w := weights(); w[slow.Addr] != atFloor {
+		t.Fatalf("an unconfirmed low sample must not cut the relay weight, got %v want %v", w[slow.Addr], atFloor)
 	}
 	recheck(SpeedResult{Err: "status 403"})
 	if slow.Speed != 2 || slow.BelowFloorN != 1 {
@@ -82,8 +84,8 @@ func TestBelowFloorNeedsConfirmation(t *testing.T) {
 	if !slow.belowFloor() {
 		t.Fatal("two consecutive low samples must confirm the active is below the floor")
 	}
-	if w := weights(); w[slow.Addr]*4 != w[peer.Addr] {
-		t.Fatalf("a confirmed below-floor active must get a quarter of the relay weight, got %v", w)
+	if w := weights(); w[slow.Addr]*4 != atFloor {
+		t.Fatalf("a confirmed below-floor active must get a quarter of the relay weight, got %v want %v", w[slow.Addr], atFloor/4)
 	}
 	recheck(SpeedResult{Mbps: 60, Bytes: 60_000_000, Colo: "SIN"})
 	if slow.belowFloor() || slow.BelowFloorN != 0 {
@@ -214,8 +216,8 @@ func TestFloorActsOnlyWhereReachable(t *testing.T) {
 		}
 		return 0
 	}
-	if w := weight(sb.Addr); w != 1/sb.medianRTT() {
-		t.Fatalf("no active reaches the floor, so the winner must keep its latency weight, got %v want %v", w, 1/sb.medianRTT())
+	if w, want := weight(sb.Addr), score(d.cfg.BandwidthWeight, sb.medianRTT(), sb.Speed); w != want {
+		t.Fatalf("no active reaches the floor, so the winner must keep its full score, got %v want %v", w, want)
 	}
 	d.replaceLowBandwidth(t0)
 	if d.promoting {
@@ -223,8 +225,8 @@ func TestFloorActsOnlyWhereReachable(t *testing.T) {
 	}
 	fast := d.pool.ips["198.18.0.1"]
 	fast.Speed, fast.BelowFloorN = 80, 0 // now one active shows the link can do it
-	if w := weight(sb.Addr); w != 1/sb.medianRTT()/4 {
-		t.Fatalf("with the floor reachable, a confirmed below-floor active must get a quarter weight, got %v", w)
+	if w, want := weight(sb.Addr), score(d.cfg.BandwidthWeight, sb.medianRTT(), d.cfg.PromoteMinMbps)/4; w != want {
+		t.Fatalf("with the floor reachable, a confirmed below-floor active must get a quarter weight, got %v want %v", w, want)
 	}
 	d.replaceLowBandwidth(t0)
 	if !d.promoting {

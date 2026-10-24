@@ -78,10 +78,13 @@ type Config struct {
 	PromoteMaxFails  int      `json:"promote_max_fails"`
 	PromoteMaxJitter float64  `json:"promote_max_jitter_ms"`
 	PromoteMinMbps   float64  `json:"promote_min_mbps"`
-	SpeedBytes       int64    `json:"speed_bytes"`
-	SpeedTimeout     Duration `json:"speed_timeout"`
-	SpeedRecheck     Duration `json:"speed_recheck"` // re-measure each active this often; 0 disables
-	SpeedGap         Duration `json:"speed_gap"`     // minimum time between bandwidth downloads
+	// BandwidthWeight trades probe time against bandwidth in relay weights
+	// and the PK bandwidth stage: 0 is latency only, 1 is bandwidth only.
+	BandwidthWeight float64  `json:"bandwidth_weight"`
+	SpeedBytes      int64    `json:"speed_bytes"`
+	SpeedTimeout    Duration `json:"speed_timeout"`
+	SpeedRecheck    Duration `json:"speed_recheck"` // re-measure each active this often; 0 disables
+	SpeedGap        Duration `json:"speed_gap"`     // minimum time between bandwidth downloads
 
 	MemoryLimitMB int `json:"memory_limit_mb"` // Go soft memory limit; 0 follows the host's free memory
 
@@ -139,6 +142,7 @@ func defaultConfig() *Config {
 		PromoteMaxFails:  0,
 		PromoteMaxJitter: 30,
 		PromoteMinMbps:   30,
+		BandwidthWeight:  0.4,
 		SpeedBytes:       99_999_999,
 		SpeedTimeout:     Duration{10 * time.Second},
 		SpeedRecheck:     Duration{12 * time.Hour},
@@ -220,6 +224,7 @@ func (c *Config) check() error {
 		{"promote_max_fails", c.PromoteMaxFails >= 0 && c.PromoteMaxFails < c.PromoteProbes},
 		{"promote_max_jitter_ms", c.PromoteMaxJitter >= 0},
 		{"promote_min_mbps", c.PromoteMinMbps >= 0},
+		{"bandwidth_weight", c.BandwidthWeight >= 0 && c.BandwidthWeight <= 1},
 		{"speed_bytes", c.SpeedBytes >= 1},
 		{"speed_timeout", c.SpeedTimeout.Duration > 0},
 		{"max_active_per_prefix24", c.MaxActivePerPrefix >= 1},

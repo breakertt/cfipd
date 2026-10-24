@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"runtime"
 	"sync/atomic"
@@ -155,6 +156,40 @@ func TestRelayWeightsUseProbeMedian(t *testing.T) {
 	ts := d.relaySnap.Load().([]relayTarget)
 	if len(ts) != 2 || ts[0].Weight != ts[1].Weight {
 		t.Fatalf("equal probe medians must give equal weights, got %+v", ts)
+	}
+}
+
+// TestRelayWeightsUseScore: relay weights follow the score
+// rtt^-(1-w) * Mbps^w. An active over the latency floor (1.3x the best
+// active) keeps serving at a quarter weight, like one under the bandwidth
+// floor. Speeds and medians are fixtures.
+func TestRelayWeightsUseScore(t *testing.T) {
+	weights := func(w float64, actives ...*IP) map[string]float64 {
+		d := testDaemon(t)
+		d.cfg.BandwidthWeight = w
+		for _, a := range actives {
+			d.pool.ips[a.Addr] = a
+		}
+		d.updateRelaySnap()
+		out := map[string]float64{}
+		for _, t := range d.relaySnap.Load().([]relayTarget) {
+			out[t.Addr] = t.Weight
+		}
+		return out
+	}
+	near := func(got, want float64) bool { return math.Abs(got/want-1) < 1e-9 }
+	fast, slow := sinActive("198.18.0.1", 300), sinActive("198.18.1.1", 300)
+	fast.Speed, slow.Speed = 300, 100
+	if ws := weights(0.4, fast, slow); !near(ws[fast.Addr]/ws[slow.Addr], math.Pow(3, 0.4)) {
+		t.Errorf("w=0.4: weight ratio %v, want 3^0.4", ws[fast.Addr]/ws[slow.Addr])
+	}
+	if ws := weights(0, fast, slow); ws[fast.Addr] != ws[slow.Addr] {
+		t.Errorf("w=0: bandwidth must not change weights, got %v", ws)
+	}
+	far := sinActive("198.18.2.1", 450) // over 1.3 x 300 ms
+	far.Speed = 300
+	if ws := weights(0.4, fast, far); !near(ws[far.Addr]/ws[fast.Addr], math.Pow(450.0/300, -0.6)/4) {
+		t.Errorf("an active over the latency floor must keep a quarter of its score, ratio %v", ws[far.Addr]/ws[fast.Addr])
 	}
 }
 

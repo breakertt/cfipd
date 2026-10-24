@@ -135,6 +135,7 @@ It logs every problem that `cfipd test` reports.
 | `health_interval` | Starting health-check interval | `"10s"` |
 | `scan_v6_ratio` | Share of new-address discovery assigned to IPv6 | `0.2` |
 | `promote_min_mbps` | Minimum throughput required for promotion | `30` |
+| `bandwidth_weight` | Weight of bandwidth against probe time in the score, from `0` (probe time only) to `1` (bandwidth only) | `0.4` |
 | `speed_recheck` | Interval between bandwidth rechecks of each active; `"0s"` disables them | `"12h"` |
 | `speed_gap` | Minimum time between the starts of bandwidth tests; an HTTP 429 answer pauses tests for at least an hour | `"15m"` |
 | `memory_limit_mb` | Go soft memory limit in MiB; `0` follows the host: current use plus a quarter of `MemAvailable`, with at least 4 MiB or a quarter of current use as headroom, and never under 8 MiB | `0` |
@@ -203,14 +204,24 @@ time by at least 20% and 30 ms without worsening p90. A failed incumbent probe
 counts as slower than any success, so an incumbent that fails half of its probes
 loses on availability alone. A second comparison of the same
 pair, at least five minutes later, confirms the result. A bandwidth comparison
-then requires 80% of the incumbent's measured throughput and at least 30 Mbps;
-the 30 Mbps floor is waived when the incumbent itself measures under it. Full
+then downloads from both endpoints. The challenger must reach 30 Mbps, unless the
+incumbent itself measures under 30 Mbps, and it must have the higher score. Full
 bandwidth comparisons are limited to two per day. A pair that loses the
 bandwidth comparison is not compared again for a day; if a download fails, the
 pair waits an hour. During a new state's
 first 24 hours, PK records proposed swaps without applying them. Fault recovery
 still operates, and the observation deadline survives restarts. PK also runs
 when the pool has fewer actives than `active_count` and no backup can fill it.
+
+The score combines probe time and bandwidth: probe time^−(1−w) × bandwidth^w, where
+w is `bandwidth_weight`. The score uses ratios, so the units cancel. With the
+default w of 0.4, 1% less probe time counts 1.5 times as much as 1% more bandwidth.
+With w = 0, only probe time counts. With w = 1, only bandwidth counts. Floors come
+before the score, so neither side can drop too far for the other. In PK, the
+challenger is always faster and must reach 30 Mbps, so the score never trades
+probe time away. With the default w, a challenger that is 20% faster needs at
+least 72% of the incumbent's bandwidth. In the relay weights, an active over 1.3
+times the probe time of the best active keeps a quarter of its weight.
 
 Each active gets a new bandwidth measurement about every 12 hours
 (`speed_recheck`), with random jitter. A first result under 30 Mbps starts a
@@ -219,7 +230,8 @@ and while another active measures at least 30 Mbps, the active continues to
 serve with a quarter of its normal relay weight. Each low result from then on
 gives the best standby that fits one full promotion test. If it passes, the two
 endpoints swap roles. Where no active reaches 30 Mbps, low results change
-nothing.
+nothing. In the relay weights, a sample under 30 Mbps counts as 30 Mbps, so only a
+confirmed result cuts more.
 
 Bandwidth tests run one at a time and start at least 15 minutes apart
 (`speed_gap`) to stay under Cloudflare rate limits. A PK test downloads twice in
@@ -229,7 +241,8 @@ an hour and does not count against the standby. When fewer than half of
 gap; the 429 pause still applies. Otherwise the default gap allows at most 96 tests a day.
 
 The implementation uses TCP passthrough to carry HTTPS. For each new client
-connection, it selects an Active IP with latency-based weights and opens a
+connection, it selects an Active IP at random, with weights in proportion to the
+score, and opens a
 connection to that Cloudflare edge (port 443 by default), then copies encrypted
 TLS bytes in both directions. TLS handshakes and HTTP requests are handled by the client
 and Cloudflare. Requests that reuse the same HTTPS connection keep the same

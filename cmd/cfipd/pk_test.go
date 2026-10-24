@@ -87,6 +87,7 @@ func TestPKObserveOnlyWindow(t *testing.T) {
 		return jobResult{job: job{kind: jSpeed, ip: sb.Addr, peer: inc.Addr, gen: sb.Gen, peerGen: inc.Gen},
 			ok: true, speed: SpeedResult{Mbps: 100}, speed2: SpeedResult{Mbps: 90}}
 	}
+	d.pkLastRun = &pkRun{challOK: 8, incOK: 8, challRTT: []float64{200}, incRTT: []float64{260}} // fixture paired medians
 	d.applySpeed(mk(), t0)
 	if sb.Role != RoleStandby || inc.Role != RoleActive {
 		t.Fatal("observe-only window must log decisions without swapping")
@@ -328,26 +329,38 @@ func TestPKVerdictShowsIncumbentFailures(t *testing.T) {
 	}
 }
 
-// TestPKFloorWaivedWhenIncumbentIsUnderIt: on a link where the incumbent
-// itself measures under the promotion floor, the absolute floor cannot be met
-// by anyone, so the 80%-of-incumbent rule alone decides; with an incumbent at
-// or above the floor, the floor still applies.
-func TestPKFloorWaivedWhenIncumbentIsUnderIt(t *testing.T) {
+// TestPKBandwidthStageUsesScore: the bandwidth stage swaps when the
+// challenger's score (rtt^-(1-w) * Mbps^w) on the fresh paired medians beats
+// the incumbent's. The promotion floor still applies, except on a link where
+// the incumbent itself measures under it. Speeds and medians are fixtures.
+func TestPKBandwidthStageUsesScore(t *testing.T) {
 	for _, tc := range []struct {
+		w          float64
 		chall, inc float64
 		swap       bool
 	}{
-		{25, 18, true},  // slow link: both under 30 Mbps
-		{15, 18, true},  // 83% of a sub-floor incumbent
-		{14, 18, false}, // 78%: under the relative rule
-		{25, 40, false}, // incumbent above the floor: the floor holds
+		{0.4, 70, 100, true},  // 1.3^0.6 * 0.7^0.4 = 1.015
+		{0.4, 60, 100, false}, // 1.3^0.6 * 0.6^0.4 = 0.954
+		{0.4, 25, 40, false},  // challenger under the 30 Mbps floor
+		{0.4, 25, 18, true},   // slow link: both under the floor
+		{0.4, 14, 18, true},   // 1.3^0.6 * (14/18)^0.4 = 1.058
+		{0.4, 11, 18, false},  // 1.3^0.6 * (11/18)^0.4 = 0.961
+		{0, 31, 100, true},    // latency only: the floor is the whole bandwidth rule
+		{1, 99, 100, false},   // bandwidth only
+		{1, 101, 100, true},
 	} {
 		d, inc, sb := pkPairFixture(t)
+		d.cfg.BandwidthWeight = tc.w
 		d.pool.pk.ObserveUntil = t0.Add(-time.Hour)
+		d.pkLastRun = &pkRun{challOK: 8, incOK: 8, challColo: "KIX", incColo: "HKG"}
+		for range 8 {
+			d.pkLastRun.challRTT = append(d.pkLastRun.challRTT, 200)
+			d.pkLastRun.incRTT = append(d.pkLastRun.incRTT, 260)
+		}
 		d.applySpeed(jobResult{job: job{kind: jSpeed, ip: sb.Addr, peer: inc.Addr}, ok: true,
 			speed: SpeedResult{Mbps: tc.chall, Colo: "KIX"}, speed2: SpeedResult{Mbps: tc.inc, Colo: "HKG"}}, t0)
 		if swapped := sb.Role == RoleActive; swapped != tc.swap {
-			t.Errorf("challenger %v Mbps vs incumbent %v Mbps: swapped=%v, want %v", tc.chall, tc.inc, swapped, tc.swap)
+			t.Errorf("w=%v: 200ms/%v Mbps vs 260ms/%v Mbps: swapped=%v, want %v", tc.w, tc.chall, tc.inc, swapped, tc.swap)
 		}
 	}
 }

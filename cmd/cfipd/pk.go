@@ -29,10 +29,7 @@ func (r *pkRun) pass(cfg *Config) (bool, string) {
 	if r.challOK < required {
 		return false, fmt.Sprintf("challenger availability %d/%d ok (need %d)", r.challOK, cfg.PromoteProbes, required)
 	}
-	inc := append([]float64(nil), r.incRTT...)
-	for range cfg.PromoteProbes - r.incOK {
-		inc = append(inc, math.Inf(1))
-	}
+	inc := r.incSamples(cfg)
 	challMed, incMed, challP90, incP90 := median(r.challRTT), median(inc), pct90(r.challRTT), pct90(inc)
 	show := func(v float64) string {
 		if math.IsInf(v, 1) {
@@ -48,6 +45,16 @@ func (r *pkRun) pass(cfg *Config) (bool, string) {
 	}
 	return true, fmt.Sprintf("median %s -> %.0fms, p90 %s -> %.0fms, incumbent %d/%d ok",
 		show(incMed), challMed, show(incP90), challP90, r.incOK, cfg.PromoteProbes)
+}
+
+// incSamples returns the incumbent's probe times with each failed probe as
+// +Inf, slower than any success.
+func (r *pkRun) incSamples(cfg *Config) []float64 {
+	inc := append([]float64(nil), r.incRTT...)
+	for range cfg.PromoteProbes - r.incOK {
+		inc = append(inc, math.Inf(1))
+	}
+	return inc
 }
 
 type pkPending struct {
@@ -257,12 +264,19 @@ func (d *daemon) applySpeed(r jobResult, now time.Time) {
 	if d.validSpeed(r.speed2) {
 		d.pool.recordSpeed(inc, r.speed2.Mbps, now)
 	}
-	// The absolute floor is waived when the incumbent itself measures under
-	// it: on such a link nobody can meet it, and the 80% rule still holds.
-	floor := d.cfg.PromoteMinMbps
+	// Score both endpoints on the fresh paired medians and the same-window
+	// downloads. The bandwidth floor is waived when the incumbent itself
+	// measures under it: on such a link nobody can meet it, and the score still
+	// decides. The latency round already made the challenger at least 20% and
+	// 30 ms faster, so the score never trades probe time away here.
+	floor, bw := d.cfg.PromoteMinMbps, d.cfg.BandwidthWeight
+	challMed, incMed := sb.medianRTT(), inc.medianRTT()
+	if lr := d.pkLastRun; lr != nil && median(lr.challRTT) > 0 {
+		challMed, incMed = median(lr.challRTT), median(lr.incSamples(d.cfg))
+	}
 	win := d.validSpeed(r.speed) && d.validSpeed(r.speed2) &&
 		(r.speed.Mbps >= floor || r.speed2.Mbps < floor) && r.speed2.Mbps > 0 &&
-		r.speed.Mbps >= 0.8*r.speed2.Mbps &&
+		score(bw, challMed, r.speed.Mbps) > score(bw, incMed, r.speed2.Mbps) &&
 		d.pool.swapDiverse(sb, inc)
 	d.store.Log(map[string]any{"type": "pk_speed", "challenger": r.ip, "incumbent": r.peer,
 		"chall_mbps": r.speed.Mbps, "inc_mbps": r.speed2.Mbps, "chall_err": r.speed.Err,
@@ -276,9 +290,10 @@ func (d *daemon) applySpeed(r jobResult, now time.Time) {
 			hold = 24 * time.Hour
 		}
 		d.pkFailUntil[r.ip+">"+r.peer] = now.Add(hold)
-		d.pkLastVerdict = fmt.Sprintf("%s vs %s: bandwidth %.1f vs %.1f Mbps, no swap", r.ip, r.peer, r.speed.Mbps, r.speed2.Mbps)
-		log.Printf("PK %s bandwidth insufficient or inconclusive: %.1fMbps (%s) vs incumbent %.1fMbps (%s)",
-			r.ip, r.speed.Mbps, r.speed.Err, r.speed2.Mbps, r.speed2.Err)
+		d.pkLastVerdict = fmt.Sprintf("%s vs %s: %.0fms %.1fMbps vs %.0fms %.1fMbps, no swap",
+			r.ip, r.peer, challMed, r.speed.Mbps, incMed, r.speed2.Mbps)
+		log.Printf("PK %s score lower, under the bandwidth floor, or inconclusive: %.0fms %.1fMbps (%s) vs incumbent %.0fms %.1fMbps (%s)",
+			r.ip, challMed, r.speed.Mbps, r.speed.Err, incMed, r.speed2.Mbps, r.speed2.Err)
 		return
 	}
 	if now.Before(d.pool.pk.ObserveUntil) {

@@ -151,15 +151,33 @@ func (d *daemon) relayStat(addr string) *RelayStat {
 // handler goroutines. Event-loop only.
 func (d *daemon) updateRelaySnap() {
 	var ts []relayTarget
-	cut := d.pool.floorReachable()
-	for _, a := range d.pool.actives() {
+	cut, limit := d.pool.floorReachable(), d.pool.rttLimit()
+	actives := d.pool.actives()
+	var speeds []float64
+	for _, a := range actives {
+		if a.Speed > 0 {
+			speeds = append(speeds, a.Speed)
+		}
+	}
+	ref := 1.0 // an active without a speed sample scores as the median active
+	if len(speeds) > 0 {
+		ref = median(speeds)
+	}
+	for _, a := range actives {
 		st := d.relayStat(a.Addr)
 		lat := a.medianRTT() // probe metric for every active; relay EMA is TCP dial time
 		if lat <= 0 {
 			lat = 500
 		}
-		w := 1 / lat
-		if a.State == StateDegraded || (cut && a.belowFloor()) {
+		bw := a.Speed
+		if bw <= 0 {
+			bw = ref
+		}
+		if cut { // under the floor the floor rule acts, after confirmation
+			bw = max(bw, d.cfg.PromoteMinMbps)
+		}
+		w := score(d.cfg.BandwidthWeight, lat, bw)
+		if a.State == StateDegraded || (cut && a.belowFloor()) || lat > limit {
 			w /= 4
 		}
 		ts = append(ts, relayTarget{Addr: a.Addr, Weight: w, Stat: st, Gen: a.Gen})
