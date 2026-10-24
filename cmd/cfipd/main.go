@@ -20,6 +20,7 @@ func usage() {
 
 daemon:
   run                     run the daemon in foreground
+  test                    check the configuration and exit
   version                 print release and build information
 
 control (talks to the running daemon over the unix socket):
@@ -37,12 +38,19 @@ control (talks to the running daemon over the unix socket):
 web dashboard (read-only, separate process; talks to the daemon over the unix socket):
   web [-listen addr]      serve the dashboard + JSON API (default 127.0.0.1:8080)
 
-flags: -config <path> (default: ./cfipd.json or /etc/cfipd.json if present)
+flags: -config <path> (default: $CFIPD_CONFIG_PATH, else ./cfipd.json or
+       /etc/cfipd.json if present, else built-in defaults)
 `)
 	os.Exit(2)
 }
 
+// findConfig picks the config file when -config is absent: $CFIPD_CONFIG_PATH
+// if set, else the first existing of ./cfipd.json and /etc/cfipd.json, else
+// none (built-in defaults).
 func findConfig() string {
+	if p := os.Getenv("CFIPD_CONFIG_PATH"); p != "" {
+		return p
+	}
 	for _, p := range []string{"cfipd.json", "/etc/cfipd.json"} {
 		if _, err := os.Stat(p); err == nil {
 			return p
@@ -60,10 +68,28 @@ func main() {
 	cfgPath := fs.String("config", findConfig(), "config file path")
 	listen := fs.String("listen", "127.0.0.1:8080", "web listen address (web command only)")
 	fs.Parse(os.Args[2:])
+	source := *cfgPath
+	if source == "" {
+		source = "built-in defaults"
+	}
+	if os.Args[1] == "test" {
+		if _, err := loadConfig(*cfgPath, true); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Printf("config %s: ok\n", source)
+		return
+	}
 
-	cfg, err := loadConfig(*cfgPath)
+	cfg, err := loadConfig(*cfgPath, false)
 	if err != nil {
 		log.Fatalf("config: %v", err)
+	}
+	if cmd := os.Args[1]; cmd == "run" || cmd == "web" {
+		log.Printf("config: %s", source)
+		if _, err := loadConfig(*cfgPath, true); err != nil {
+			log.Printf("config warning: %v (continuing; cfipd test shows the same)", err)
+		}
 	}
 
 	switch os.Args[1] {

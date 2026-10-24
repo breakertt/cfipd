@@ -77,6 +77,7 @@ Debian 包以专用系统用户 `cfipd` 运行 daemon：
 | daemon / 面板服务 | `cfipd.service` / `cfipd-web.service` |
 
 ```bash
+cfipd test -config /etc/cfipd.json    # 检查配置修改
 sudo systemctl restart cfipd          # 应用配置修改
 systemctl status cfipd
 sudo journalctl -u cfipd -f
@@ -89,21 +90,28 @@ sudo systemctl disable --now cfipd-web
 
 ## 配置
 
-systemd 服务明确读取 `/etc/cfipd.json`。直接运行时，cfipd 依次查找当前目录的
-`cfipd.json` 和 `/etc/cfipd.json`；也可以用
-`cfipd run -config /path/to/config.json` 指定配置。
+cfipd 只读取一个 JSON 配置文件，按以下顺序选择：
 
-配置字段覆盖内置默认值。安装包的配置可以写成：
+1. `-config` 指定的文件，例如 `cfipd run -config /path/to/config.json`。
+2. 环境变量 `CFIPD_CONFIG_PATH` 指定的文件。
+3. 当前目录的 `cfipd.json`，然后是 `/etc/cfipd.json`。
+4. 以上文件都不存在时，使用内置默认值。
+
+systemd 服务传入 `-config /etc/cfipd.json`，所以 `CFIPD_CONFIG_PATH` 不影响服务。
+文件中的字段覆盖内置默认值。安装包安装的 `/etc/cfipd.json` 为：
 
 ```json
 {
-  "allowed_colos": ["NRT", "KIX", "HKG", "SIN"],
-  "active_count": 3,
-  "relay_listen": ":8443",
   "data_dir": "/var/lib/cfipd",
-  "socket": "/run/cfipd/ctl.sock"
+  "socket": "/run/cfipd/ctl.sock",
+  "relay_listen": ":8443"
 }
 ```
+
+要修改默认值，加入下表中的字段。修改后运行 `cfipd test`：它报告文件不存在、JSON 格式
+错误、未知字段和越界的值，出错时以状态 1 退出。daemon 只在无法解析文件时停止；文件
+不存在时使用内置默认值，未知字段被忽略，所以过时的字段不会让服务停下。`cfipd test`
+报告的每个问题，daemon 都会在启动时写入日志。
 
 | 字段 | 用途 | 默认值 |
 |---|---|---|
@@ -136,6 +144,7 @@ systemd 的目录设置和权限。
 | `cfipd import FILE` | 将 IP 列表或 CloudflareSpeedTest CSV 导入为候选种子 |
 | `cfipd promote IP` | 验证一个 Standby，尝试补入空缺的现役位置 |
 | `cfipd quarantine IP` | 让一个地址冷却后重新验证 |
+| `cfipd test` | 检查配置文件；出错时以状态 1 退出 |
 | `cfipd version` | 查看版本、源码提交和构建时间 |
 
 也可直接执行 `cfipd web` 启动面板，默认监听 `127.0.0.1:8080`，用 `-listen` 调整地址。

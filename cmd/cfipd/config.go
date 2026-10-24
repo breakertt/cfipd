@@ -1,10 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/url"
 	"os"
+	"reflect"
+	"strings"
 	"time"
 )
 
@@ -149,22 +154,82 @@ func defaultConfig() *Config {
 	}
 }
 
-func loadConfig(path string) (*Config, error) {
+// loadConfig overlays the JSON file at path on the built-in defaults; an
+// empty path means defaults only. With strict (cfipd test), a missing file,
+// an unknown key or an out-of-range value is an error. Otherwise a missing
+// file means defaults and unknown keys are ignored, so a stale key never stops
+// a running service; the daemon logs the strict result at startup instead.
+func loadConfig(path string, strict bool) (*Config, error) {
 	cfg := defaultConfig()
 	if path == "" {
 		return cfg, nil
 	}
 	b, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
+	if errors.Is(err, os.ErrNotExist) && !strict {
 		return cfg, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal(b, cfg); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	if strict {
+		dec.DisallowUnknownFields()
+	}
+	err = dec.Decode(cfg)
+	if err == nil && dec.Decode(&json.RawMessage{}) != io.EOF {
+		err = errors.New("trailing data after the JSON object")
+	}
+	if err == nil && strict {
+		err = cfg.check()
+	}
+	if err != nil {
 		return nil, fmt.Errorf("config %s: %w", path, err)
 	}
 	return cfg, nil
+}
+
+// check reports the first setting that would keep the daemon from working.
+func (c *Config) check() error {
+	for _, v := range []struct {
+		key string
+		ok  bool
+	}{
+		{"data_dir", c.DataDir != ""},
+		{"socket", c.Socket != ""},
+		{"trace_url", validURL(c.TraceURL)},
+		{"down_url", validURL(c.DownURL)},
+		{"allowed_colos", len(c.AllowedColos) > 0},
+		{"active_count", c.ActiveCount >= 1},
+		{"window_size", c.WindowSize >= 1},
+		{"standby_min/standby_target/standby_max", 0 <= c.StandbyMin && c.StandbyMin <= c.StandbyTarget && c.StandbyTarget <= c.StandbyMax},
+		{"scan_v6_ratio", c.ScanV6Ratio >= 0 && c.ScanV6Ratio <= 1},
+		{"promote_probes", c.PromoteProbes >= 1},
+		{"promote_max_fails", c.PromoteMaxFails >= 0 && c.PromoteMaxFails < c.PromoteProbes},
+		{"speed_bytes", c.SpeedBytes >= 1},
+		{"max_active_per_prefix24", c.MaxActivePerPrefix >= 1},
+		{"max_active_per_colo", c.MaxActivePerColo >= 1},
+		{"relay_port", c.RelayPort >= 1 && c.RelayPort <= 65535},
+		{"workers", c.Workers >= 1},
+		{"candidate_cap", c.CandidateCap >= 1},
+		{"candidate_per_prefix", c.CandidatePerPrefix >= 1},
+	} {
+		if !v.ok {
+			return fmt.Errorf("%s: value out of range", v.key)
+		}
+	}
+	rv := reflect.ValueOf(c).Elem()
+	for i := range rv.NumField() {
+		if d, ok := rv.Field(i).Interface().(Duration); ok && d.Duration < 0 {
+			key, _, _ := strings.Cut(rv.Type().Field(i).Tag.Get("json"), ",")
+			return fmt.Errorf("%s: negative duration", key)
+		}
+	}
+	return nil
+}
+
+func validURL(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && u.Scheme != "" && u.Host != ""
 }
 
 func (c *Config) coloAllowed(colo string) bool {

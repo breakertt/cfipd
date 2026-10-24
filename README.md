@@ -85,6 +85,7 @@ The Debian package runs the daemon as the dedicated `cfipd` system user:
 | Daemon / dashboard services | `cfipd.service` / `cfipd-web.service` |
 
 ```bash
+cfipd test -config /etc/cfipd.json    # Check configuration changes
 sudo systemctl restart cfipd          # Apply configuration changes
 systemctl status cfipd
 sudo journalctl -u cfipd -f
@@ -98,22 +99,31 @@ back up its data and stop it. Two daemons must not share a data directory.
 
 ## Configuration
 
-The systemd services explicitly load `/etc/cfipd.json`. When run directly, cfipd
-looks for `cfipd.json` in the current directory, then `/etc/cfipd.json`. Select a
-file explicitly with `cfipd run -config /path/to/config.json`.
+cfipd reads one JSON file, chosen in this order:
 
-Configuration fields override built-in defaults. A package configuration can look
-like this:
+1. The file named by `-config`, for example `cfipd run -config /path/to/config.json`.
+2. The file named by the `CFIPD_CONFIG_PATH` environment variable.
+3. `cfipd.json` in the current directory, then `/etc/cfipd.json`.
+4. Built-in defaults when none of these files exists.
+
+The systemd services pass `-config /etc/cfipd.json`, so `CFIPD_CONFIG_PATH` does
+not change them. Fields in the file override built-in defaults. The package
+installs this `/etc/cfipd.json`:
 
 ```json
 {
-  "allowed_colos": ["NRT", "KIX", "HKG", "SIN"],
-  "active_count": 3,
-  "relay_listen": ":8443",
   "data_dir": "/var/lib/cfipd",
-  "socket": "/run/cfipd/ctl.sock"
+  "socket": "/run/cfipd/ctl.sock",
+  "relay_listen": ":8443"
 }
 ```
+
+Add a field from the table below to change its default. After an edit, run
+`cfipd test`. It reports a missing file, malformed JSON, unknown keys, and
+out-of-range values, and it exits with status 1 on an error. The daemon stops
+only for a file that it cannot parse. It starts with built-in defaults when the
+file is missing and ignores unknown keys, so a stale key cannot stop a service.
+It logs every problem that `cfipd test` reports.
 
 | Field | Purpose | Default |
 |---|---|---|
@@ -149,6 +159,7 @@ the daemon through its Unix socket.
 | `cfipd import FILE` | Import IPs or a CloudflareSpeedTest CSV as candidate seeds |
 | `cfipd promote IP` | Qualify a standby for a vacant active slot |
 | `cfipd quarantine IP` | Cool an address down before revalidation |
+| `cfipd test` | Check the configuration file; exit status 1 on an error |
 | `cfipd version` | Show version, source commit, and build time |
 
 The dashboard can also be started directly with `cfipd web`. It listens on
