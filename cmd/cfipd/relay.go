@@ -65,6 +65,7 @@ func (d *daemon) relayStat(addr string) *RelayStat {
 // handler goroutines. Event-loop only.
 func (d *daemon) updateRelaySnap() {
 	var ts []relayTarget
+	cut := d.pool.floorReachable()
 	for _, a := range d.pool.actives() {
 		st := d.relayStat(a.Addr)
 		lat := a.medianRTT() // probe metric for every active; relay EMA is TCP dial time
@@ -72,7 +73,7 @@ func (d *daemon) updateRelaySnap() {
 			lat = 500
 		}
 		w := 1 / lat
-		if a.State == StateDegraded || a.belowFloor() {
+		if a.State == StateDegraded || (cut && a.belowFloor()) {
 			w /= 4
 		}
 		ts = append(ts, relayTarget{Addr: a.Addr, Weight: w, Stat: st, Gen: a.Gen})

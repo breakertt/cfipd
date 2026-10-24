@@ -211,16 +211,18 @@ when the pool has fewer actives than `active_count` and no backup can fill it.
 Each active gets a new bandwidth measurement about every 12 hours
 (`speed_recheck`), with random jitter. A first result under 30 Mbps starts a
 confirmation measurement about an hour later. After two such results in a row,
-the active continues to serve with a quarter of its normal relay weight. Each
-low result from then on gives the best standby that fits one full promotion
-test. If it passes, the two endpoints swap roles.
+and while another active measures at least 30 Mbps, the active continues to
+serve with a quarter of its normal relay weight. Each low result from then on
+gives the best standby that fits one full promotion test. If it passes, the two
+endpoints swap roles. Where no active reaches 30 Mbps, low results change
+nothing.
 
 Bandwidth tests run one at a time and start at least 15 minutes apart
 (`speed_gap`) to stay under Cloudflare rate limits. A PK test downloads twice in
 a row, once for each endpoint. An HTTP 429 answer pauses all tests for at least
 an hour and does not count against the standby. When fewer than half of
-`active_count` actives remain, fill does not wait for the gap; the 429 pause
-still applies. Otherwise the default gap allows at most 96 tests a day.
+`active_count` actives remain, fill and a manual promote do not wait for the
+gap; the 429 pause still applies. Otherwise the default gap allows at most 96 tests a day.
 
 The implementation uses TCP passthrough to carry HTTPS. For each new client
 connection, it selects an Active IP with latency-based weights and opens a

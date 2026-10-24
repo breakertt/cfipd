@@ -65,12 +65,12 @@ func (d *daemon) applyRecheck(r jobResult, ip *IP, now time.Time) {
 }
 
 // replaceLowBandwidth tries to replace the slowest confirmed below-floor
-// active. The node keeps serving, with a quarter of the relay weight, until a
-// standby passes the full promotion test; the swap is one-for-one. Each
-// below-floor sample triggers at most one attempt, so downloads stay bounded
-// by SpeedRecheck.
+// active while another active shows the floor is reachable. The node keeps
+// serving, with a quarter of the relay weight, until a standby passes the
+// full promotion test; the swap is one-for-one. Each below-floor sample
+// triggers at most one attempt, so downloads stay bounded by SpeedRecheck.
 func (d *daemon) replaceLowBandwidth(now time.Time) {
-	if d.longJobBlocked(now, false) != "" {
+	if d.longJobBlocked(now, false) != "" || !d.pool.floorReachable() {
 		return
 	}
 	var low *IP

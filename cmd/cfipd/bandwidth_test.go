@@ -46,6 +46,7 @@ func TestBelowFloorNeedsConfirmation(t *testing.T) {
 	d := testDaemon(t)
 	d.cfg.SpeedRecheck = Duration{12 * time.Hour}
 	slow, peer := sinActive("198.18.0.1", 300), sinActive("198.18.1.1", 300)
+	peer.Speed, peer.SpeedAt = 80, t0 // the link reaches the floor
 	d.pool.ips[slow.Addr], d.pool.ips[peer.Addr] = slow, peer
 	recheck := func(s SpeedResult) {
 		d.rechecking = true
@@ -95,6 +96,7 @@ func TestLowBandwidthActiveReplacedByQualifiedStandby(t *testing.T) {
 	d.ctx = cancelledCtx()
 	low := d.pool.ips["198.18.0.1"]
 	low.Speed, low.SpeedAt, low.BelowFloorN = 2, t0, 2
+	d.pool.ips["198.18.1.1"].Speed, d.pool.ips["198.18.1.1"].SpeedAt = 80, t0 // the link reaches the floor
 	sb2 := freshStandby("198.18.4.1", "KIX", 160)
 	d.pool.ips[sb2.Addr] = sb2
 
@@ -179,5 +181,50 @@ func TestFailedConfirmationRetriesWithinTheHour(t *testing.T) {
 	d.recheckBandwidth(t0)
 	if wait := a.SpeedDue.Sub(t0); !d.rechecking || wait <= 0 || wait > time.Hour {
 		t.Fatalf("a pending confirmation must retry within the hour, got %v", wait)
+	}
+}
+
+// TestFloorActsOnlyWhereReachable: a below-floor active loses relay weight and
+// gets a replacement test only while another active shows that the link
+// reaches the floor. Where every measured active is under it, including a PK
+// winner under the floor waiver, nobody can meet it: weights stay
+// latency-based and no futile replacement test runs.
+func TestFloorActsOnlyWhereReachable(t *testing.T) {
+	d, inc, sb := pkPairFixture(t)
+	d.ctx = cancelledCtx()
+	d.pool.pk.ObserveUntil = t0.Add(-time.Hour)
+	for _, a := range d.pool.actives() {
+		a.Speed, a.SpeedAt, a.BelowFloorN = 20, t0, 2 // slow link: every active under 30 Mbps
+	}
+	sb.Speed, sb.SpeedAt, sb.BelowFloorN = 24, t0, 1 // an earlier sub-floor sample
+	d.applySpeed(jobResult{job: job{kind: jSpeed, ip: sb.Addr, peer: inc.Addr}, ok: true,
+		speed: SpeedResult{Mbps: 25, Colo: "KIX"}, speed2: SpeedResult{Mbps: 18, Colo: "HKG"}}, t0)
+	if sb.Role != RoleActive || !sb.belowFloor() {
+		t.Fatalf("fixture: the waiver must let the faster endpoint win with a sub-floor streak, role=%s n=%d", sb.Role, sb.BelowFloorN)
+	}
+	weight := func(addr string) float64 {
+		d.updateRelaySnap()
+		for _, tg := range d.relaySnap.Load().([]relayTarget) {
+			if tg.Addr == addr {
+				return tg.Weight
+			}
+		}
+		return 0
+	}
+	if w := weight(sb.Addr); w != 1/sb.medianRTT() {
+		t.Fatalf("no active reaches the floor, so the winner must keep its latency weight, got %v want %v", w, 1/sb.medianRTT())
+	}
+	d.replaceLowBandwidth(t0)
+	if d.promoting {
+		t.Fatal("no replacement test may start where no active reaches the floor")
+	}
+	fast := d.pool.ips["198.18.0.1"]
+	fast.Speed, fast.BelowFloorN = 80, 0 // now one active shows the link can do it
+	if w := weight(sb.Addr); w != 1/sb.medianRTT()/4 {
+		t.Fatalf("with the floor reachable, a confirmed below-floor active must get a quarter weight, got %v", w)
+	}
+	d.replaceLowBandwidth(t0)
+	if !d.promoting {
+		t.Fatal("with the floor reachable, a confirmed below-floor active must get a replacement test")
 	}
 }

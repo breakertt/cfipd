@@ -585,6 +585,19 @@ func (p *Pool) recordSpeed(ip *IP, mbps float64, now time.Time) {
 	ip.SpeedDue = p.recheckAfter(ip, now)
 }
 
+// floorReachable reports whether some active's latest bandwidth sample meets
+// the promotion floor. Only then may a below-floor active lose relay weight or
+// get a replacement test: where no active reaches the floor, nobody can meet
+// it, and PK waives it too.
+func (p *Pool) floorReachable() bool {
+	for _, a := range p.actives() {
+		if !a.SpeedAt.IsZero() && a.Speed >= p.cfg.PromoteMinMbps {
+			return true
+		}
+	}
+	return false
+}
+
 // recheckAfter is when an active's next bandwidth recheck is due after now.
 func (p *Pool) recheckAfter(ip *IP, now time.Time) time.Time {
 	every := p.cfg.SpeedRecheck.Duration
