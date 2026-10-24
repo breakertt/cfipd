@@ -128,7 +128,7 @@ type connLog struct {
 
 type connRecord struct {
 	client             string    // ip:port of the client
-	upstream, err      string    // guarded by connLog.mu
+	upstream, err, sni string    // guarded by connLog.mu
 	start, end         time.Time // end guarded by connLog.mu; zero while open
 	bytesUp, bytesDown atomic.Int64
 }
@@ -136,6 +136,7 @@ type connRecord struct {
 type connView struct {
 	Client    string  `json:"client"`
 	Upstream  string  `json:"upstream,omitempty"`
+	SNI       string  `json:"sni,omitempty"`
 	Start     string  `json:"start"`
 	End       string  `json:"end,omitempty"`
 	Seconds   float64 `json:"seconds"`
@@ -161,6 +162,12 @@ func (l *connLog) dialed(r *connRecord, upstream string) {
 	r.upstream = upstream
 }
 
+func (l *connLog) setSNI(r *connRecord, sni string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	r.sni = sni
+}
+
 func (l *connLog) end(r *connRecord, err string, now time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -179,7 +186,7 @@ func (l *connLog) list() []connView {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	view := func(r *connRecord) connView {
-		v := connView{Client: r.client, Upstream: r.upstream, Start: r.start.Format(time.RFC3339),
+		v := connView{Client: r.client, Upstream: r.upstream, SNI: r.sni, Start: r.start.Format(time.RFC3339),
 			BytesUp: r.bytesUp.Load(), BytesDown: r.bytesDown.Load(), Err: r.err}
 		end := now
 		if !r.end.IsZero() {
@@ -197,6 +204,122 @@ func (l *connLog) list() []connView {
 		out = append(out, view(l.recent[i]))
 	}
 	return out
+}
+
+// maxHello bounds the bytes that sniSniffer keeps: one full TLS record.
+const maxHello = 5 + 16384
+
+// sniSniffer passes the client stream through unchanged and reads the server
+// name from the TLS ClientHello at its start. It never delays a byte; it keeps
+// a copy only while the first record is still incomplete.
+type sniSniffer struct {
+	r     io.Reader
+	buf   []byte
+	done  bool
+	found func(string)
+}
+
+func (s *sniSniffer) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	if s.done || n == 0 {
+		return n, err
+	}
+	b := p[:n]
+	if s.buf != nil {
+		s.buf = append(s.buf, b...)
+		b = s.buf
+	}
+	name, done := clientHelloSNI(b)
+	switch {
+	case done:
+		s.done, s.buf = true, nil
+		if name != "" {
+			s.found(name)
+		}
+	case len(b) >= maxHello:
+		s.done, s.buf = true, nil
+	case s.buf == nil:
+		s.buf = append([]byte(nil), b...)
+	}
+	return n, err
+}
+
+// clientHelloSNI returns the server name in the TLS ClientHello at the start
+// of b. done is false while b may still be an incomplete first record; it is
+// true once the name is found or b cannot hold one. With ECH the name is the
+// public outer name.
+func clientHelloSNI(b []byte) (string, bool) {
+	if len(b) > 0 && b[0] != 0x16 { // not a TLS handshake record
+		return "", true
+	}
+	if len(b) < 5 {
+		return "", false
+	}
+	if n := int(b[3])<<8 | int(b[4]); len(b) < 5+n {
+		return "", false
+	} else {
+		b = b[5 : 5+n]
+	}
+	c := cursor(b)
+	if t, _ := c.uint(1); t != 1 { // ClientHello
+		return "", true
+	}
+	c.skip(3 + 2 + 32) // handshake length, version, random
+	c.vec(1)           // session id
+	c.vec(2)           // cipher suites
+	c.vec(1)           // compression methods
+	exts := cursor(c.vec(2))
+	for len(exts) >= 4 {
+		typ, _ := exts.uint(2)
+		data := cursor(exts.vec(2))
+		if typ != 0 { // server_name
+			continue
+		}
+		names := cursor(data.vec(2))
+		for len(names) >= 3 {
+			kind, _ := names.uint(1)
+			if name := names.vec(2); kind == 0 && len(name) > 0 {
+				return string(name), true
+			}
+		}
+	}
+	return "", true
+}
+
+// cursor reads big-endian fields; a short read empties it.
+type cursor []byte
+
+func (c *cursor) uint(n int) (int, bool) {
+	if len(*c) < n {
+		*c = nil
+		return 0, false
+	}
+	v := 0
+	for _, x := range (*c)[:n] {
+		v = v<<8 | int(x)
+	}
+	*c = (*c)[n:]
+	return v, true
+}
+
+func (c *cursor) skip(n int) {
+	if len(*c) < n {
+		*c = nil
+		return
+	}
+	*c = (*c)[n:]
+}
+
+// vec reads a vector with a length prefix of lenBytes bytes.
+func (c *cursor) vec(lenBytes int) []byte {
+	n, ok := c.uint(lenBytes)
+	if !ok || len(*c) < n {
+		*c = nil
+		return nil
+	}
+	v := (*c)[:n]
+	*c = (*c)[n:]
+	return v
 }
 
 // relayBufs holds the copy buffers of relay connections.
@@ -371,7 +494,8 @@ func (d *daemon) handleRelayConn(c net.Conn) {
 	st := chosen.Stat
 	done := make(chan struct{}, 2)
 	go func() {
-		copyCounted(up, c, &st.BytesUp, &cs.up, &cr.bytesUp)
+		sniff := &sniSniffer{r: c, found: func(name string) { d.conns.setSNI(cr, name) }}
+		copyCounted(up, sniff, &st.BytesUp, &cs.up, &cr.bytesUp)
 		if tc, ok := up.(*net.TCPConn); ok {
 			tc.CloseWrite()
 		}

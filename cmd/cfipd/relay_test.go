@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"math"
@@ -451,5 +452,67 @@ func TestConnLogKeepsRecentClosed(t *testing.T) {
 	}
 	if want := fmt.Sprintf("192.0.2.2:%d", recentConns+49); cs[1].Client != want {
 		t.Fatalf("newest closed first: got %s, want %s", cs[1].Client, want)
+	}
+}
+
+// clientHello returns the first bytes that a real TLS client sends for name.
+func clientHello(t *testing.T, name string) []byte {
+	t.Helper()
+	cli, srv := net.Pipe()
+	defer srv.Close()
+	go tls.Client(cli, &tls.Config{ServerName: name}).Handshake()
+	buf := make([]byte, 0, 4096)
+	srv.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for {
+		chunk := make([]byte, 4096)
+		n, err := srv.Read(chunk)
+		buf = append(buf, chunk[:n]...)
+		if len(buf) >= 5 && len(buf) >= 5+int(buf[3])<<8|int(buf[4]) || err != nil {
+			cli.Close()
+			return buf
+		}
+	}
+}
+
+// The SNI parser reads the name from a real ClientHello, also when the hello
+// arrives in pieces, and gives up on data that is not TLS.
+func TestClientHelloSNI(t *testing.T) {
+	hello := clientHello(t, "example.com")
+	if name, done := clientHelloSNI(hello); !done || name != "example.com" {
+		t.Fatalf("whole hello: %q %v", name, done)
+	}
+	if _, done := clientHelloSNI(hello[:len(hello)/2]); done {
+		t.Fatal("half a hello must ask for more data")
+	}
+	var got string
+	s := &sniSniffer{r: io.MultiReader(bytes.NewReader(hello[:3]), bytes.NewReader(hello[3:700]), bytes.NewReader(hello[700:])),
+		found: func(n string) { got = n }}
+	if b, _ := io.ReadAll(s); !bytes.Equal(b, hello) || got != "example.com" {
+		t.Fatalf("sniffer must pass bytes through unchanged and find the name, got %q", got)
+	}
+	if name, done := clientHelloSNI([]byte("GET / HTTP/1.1\r\n")); !done || name != "" {
+		t.Fatalf("plain HTTP: %q %v", name, done)
+	}
+}
+
+// A relayed TLS connection is listed with the SNI of its ClientHello.
+func TestRelayListsSNI(t *testing.T) {
+	d := testDaemon(t)
+	cli, err := net.Dial("tcp", relayVia(t, d, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+	cli.SetDeadline(time.Now().Add(2 * time.Second))
+	go tls.Client(cli, &tls.Config{ServerName: "example.com"}).Handshake() // the echo upstream fails it
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if cs := d.conns.list(); len(cs) == 1 && cs[0].SNI == "example.com" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("connections: %+v", d.conns.list())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

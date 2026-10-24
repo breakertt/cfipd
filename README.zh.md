@@ -151,7 +151,7 @@ systemd 的目录设置和权限。
 | `cfipd prefixes` | 查看前缀学习统计 |
 | `cfipd relay` | 各入口的连接与流量统计 |
 | `cfipd clients` | 启动以来各客户端 IP 的 relay 连接与流量（最多记 256 个） |
-| `cfipd conns` | 每条进行中的 relay 连接和最近结束的 100 条：客户端、上游、时长、流量 |
+| `cfipd conns` | 每条进行中的 relay 连接和最近结束的 100 条：客户端、SNI、上游、时长、流量 |
 | `cfipd scan` | 安排一次新地址探测 |
 | `cfipd import FILE` | 将 IP 列表或 CloudflareSpeedTest CSV 导入为候选种子 |
 | `cfipd promote IP` | 验证一个 Standby，尝试补入空缺的现役位置 |
@@ -215,7 +215,8 @@ Cloudflare 限流；PK 测试会连续下载两次，两个入口各一次。遇
 
 实现层通过 TCP 透传承载 HTTPS：每条新客户端连接按与分数成正比的权重随机选择一个 Active IP，
 连接到该 Cloudflare 边缘入口（默认 443 端口），双向复制加密的 TLS 字节流。
-TLS 握手和 HTTP 请求由客户端与 Cloudflare 处理。复用同一条 HTTPS 连接的请求继续
+TLS 握手和 HTTP 请求由客户端与 Cloudflare 处理。为了连接列表，cfipd 在转发时读取明文
+TLS ClientHello 里的服务器名（SNI）；客户端用了加密 ClientHello（ECH）时，读到的是外层的公共名。复用同一条 HTTPS 连接的请求继续
 使用同一个上游；选 IP 发生在建连时，不是每个 HTTP 请求各选一次。
 换位只影响新的 HTTPS 连接，已经建立的会话继续使用原上游。
 

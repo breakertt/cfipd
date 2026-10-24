@@ -27,9 +27,10 @@
   #badge.ok { color:var(--ok); } #badge.warn { color:var(--warn); } #badge.bad { color:var(--bad); }
   nav { display:flex; align-items:center; gap:.4rem; margin-left:auto; }
   #updated { font:.72rem var(--mono); color:var(--muted); margin-right:.3rem; }
-  nav button { font:.76rem var(--mono); color:var(--muted); background:var(--panel); border:1px solid var(--line);
+  nav button, button.more { font:.76rem var(--mono); color:var(--muted); background:var(--panel); border:1px solid var(--line);
     border-radius:99px; padding:.3em .95em; cursor:pointer; }
-  nav button:hover { color:var(--ink); border-color:var(--muted); }
+  button.more { margin-top:.6rem; }
+  nav button:hover, button.more:hover { color:var(--ink); border-color:var(--muted); }
   nav button:disabled { opacity:.5; cursor:default; }
   #err { display:none; margin-top:.8rem; border:1px solid var(--bad); color:var(--bad); border-radius:8px;
     padding:.5rem .8rem; font:.76rem var(--mono); overflow-wrap:anywhere; }
@@ -64,8 +65,8 @@
   .last { font:.74rem var(--mono); color:var(--muted); overflow-wrap:anywhere; }
 
   .tw { overflow-x:auto; }
-  .tw.scroll { max-height:26rem; overflow-y:auto; }
-  .tw.scroll th { position:sticky; top:0; background:var(--panel); }
+  td .cell { display:flex; align-items:baseline; }
+  td .sub { display:block; font-size:.7rem; color:var(--muted); margin-top:.1rem; }
   table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
   th, td { padding:.55rem .85rem; white-space:nowrap; text-align:right; border-bottom:1px solid var(--line); }
   th.l, td.l { text-align:left; }
@@ -137,6 +138,7 @@
 <script>
 const POLL_MS = 10000, STALE_MS = 30000;
 let lastOK = 0, inflight = false, failed = false, timer = null, lastData = null, lastErr = '';
+let allConns = false; // show every closed connection, not only the latest 20
 
 // UI strings. English is the source language; zh is a translation, not a second code path.
 const I18N = {
@@ -144,8 +146,8 @@ const I18N = {
     title: 'cfipd dashboard', refresh: 'Refresh',
     h_overview: 'Overview', h_active: 'Active', sub_active: 'entry points that serve relay traffic now',
     h_clients: 'Clients', sub_clients: 'relay users since start, last seen first',
-    h_conns: 'Connections', sub_conns: 'open first, then the latest 100 closed',
-    th_upstream: 'Upstream', th_started: 'Started', th_duration: 'Duration', th_state: 'State',
+    h_conns: 'Connections', sub_conns: 'open first, then the latest closed',
+    th_conn: 'SNI · client', show_all: n => `Show all ${n} closed`, fewer: 'Show fewer', th_upstream: 'Upstream', th_started: 'Started', th_duration: 'Duration', th_state: 'State',
     c_open: 'open', c_closed: 'closed', c_failed: 'failed', no_conns: 'No relay connection since start',
     h_select: 'Selection', h_standby: 'Standby', sub_standby: 'ranked, best first · green: ms faster than the slowest active',
     st_loading: 'Loading…', st_nocon: 'Cannot reach cfipd', st_lost: 'Connection lost', st_stale: 'Data is stale',
@@ -169,8 +171,8 @@ const I18N = {
     title: 'cfipd 仪表盘', refresh: '刷新',
     h_overview: '概览', h_active: 'Active', sub_active: '当前承载 relay 流量的入口',
     h_clients: '客户端', sub_clients: '自启动以来使用 relay 的客户端，最近的在前',
-    h_conns: '连接', sub_conns: '进行中的在前，其后是最近结束的 100 条',
-    th_upstream: '上游', th_started: '开始', th_duration: '时长', th_state: '状态',
+    h_conns: '连接', sub_conns: '进行中的在前，其后是最近结束的',
+    th_conn: 'SNI · 客户端', show_all: n => `显示全部 ${n} 条已结束`, fewer: '收起', th_upstream: '上游', th_started: '开始', th_duration: '时长', th_state: '状态',
     c_open: '进行中', c_closed: '已结束', c_failed: '失败', no_conns: '启动以来还没有 relay 连接',
     h_select: '选择', h_standby: 'Standby', sub_standby: '按优先级排名 · 绿色数字：比最慢的 Active 快多少 ms',
     st_loading: '加载中…', st_nocon: '无法连接 cfipd', st_lost: '连接中断', st_stale: '数据过期',
@@ -206,7 +208,7 @@ const ms = v => v ? Math.round(v) + ' ms' : '—';
 // fail_rate is omitted from the JSON when it is zero.
 const failPct = v => v.samples > 0 ? ((v.fail_rate || 0) * 100).toFixed(0) + '%' : '—';
 const fam = a => a.includes(':') ? 'IPv6' : 'IPv4';
-const brk = a => esc(a).replace(/:/g, ':<wbr>'); // IPv6 breaks only at colons
+const brk = a => esc(a).replace(/([:.])/g, '$1<wbr>'); // addresses and names break at : and .
 // Go durations: "4m0s" -> "4m", "1h16m53s" -> "1h16m".
 const dur = s => s ? esc(String(s).replace(/(h\d+m)[\d.]+s$/, '$1').replace(/([hm])0s$/, '$1').replace(/h0m$/, 'h')) : '—';
 function secs(s) {
@@ -295,15 +297,18 @@ function render(status, standbys, relay, clients, conns) {
       <td class="${c.open > 0 ? 'ok' : 'dim'}">${c.open > 0 ? t('online') : ago(c.last_seen)}</td></tr>`).join('')}</tbody>
     </table></div>` : `<div class="empty">${t('no_clients')}</div>`;
 
-  $('conns').innerHTML = conns.length ? `<div class="card tw scroll"><table>
-    <thead><tr><th class="l">${t('th_client')}</th><th class="l opt">${t('th_upstream')}</th><th class="opt">${t('th_started')}</th>
-      <th>${t('th_duration')}</th><th class="opt">${t('th_up')}</th><th>${t('th_down')}</th><th>${t('th_state')}</th></tr></thead>
-    <tbody>${conns.map(c => {
-      const [cls, st] = !c.end ? ['ok', t('c_open')] : c.error ? ['bad', t('c_failed')] : ['dim', t('c_closed')];
-      return `<tr><td class="l mono brk">${brk(c.client)}</td><td class="l mono opt ${c.upstream ? '' : 'dim'}">${esc(c.upstream || '—')}</td>
+  const closed = conns.filter(c => c.end), shown = conns.filter(c => !c.end).concat(allConns ? closed : closed.slice(0, 20));
+  $('conns').innerHTML = conns.length ? `<div class="card tw"><table>
+    <thead><tr><th class="l">${t('th_conn')}</th><th class="l opt">${t('th_upstream')}</th><th class="opt">${t('th_started')}</th>
+      <th>${t('th_duration')}</th><th class="opt">${t('th_up')}</th><th>${t('th_down')}</th><th class="opt">${t('th_state')}</th></tr></thead>
+    <tbody>${shown.map(c => {
+      const [cls, st, dot] = !c.end ? ['ok', t('c_open'), 'ok'] : c.error ? ['bad', t('c_failed'), 'bad'] : ['dim', t('c_closed'), 'off'];
+      return `<tr><td class="l mono brk"><div class="cell"><span class="dot ${dot}" title="${st}"></span><div>${brk(c.sni || '—')}<span class="sub">${brk(c.client)}</span></div></div></td><td class="l mono opt ${c.upstream ? '' : 'dim'}">${esc(c.upstream || '—')}</td>
         <td class="opt dim">${clock(c.start)}</td><td>${secs(c.seconds)}</td><td class="opt">${bytes(c.bytes_up)}</td>
-        <td>${bytes(c.bytes_down)}</td><td class="${cls}"${c.error ? ` title="${esc(c.error)}"` : ''}>${st}</td></tr>`;
-    }).join('')}</tbody></table></div>` : `<div class="empty">${t('no_conns')}</div>`;
+        <td>${bytes(c.bytes_down)}</td><td class="opt ${cls}"${c.error ? ` title="${esc(c.error)}"` : ''}>${st}</td></tr>`;
+    }).join('')}</tbody></table></div>${closed.length > 20
+      ? `<button class="more" id="more-conns">${allConns ? t('fewer') : t('show_all')(closed.length)}</button>` : ''}`
+    : `<div class="empty">${t('no_conns')}</div>`;
 
   const pk = status.pk || {};
   const pkState = pk.running ? ['ok', t('pk_comparing')]
@@ -381,6 +386,9 @@ async function poll() {
 for (const e of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(e, ev => ev.preventDefault(), { passive: false });
 document.addEventListener('touchmove', ev => { if (ev.touches.length > 1) ev.preventDefault(); }, { passive: false });
 
+document.addEventListener('click', ev => {
+  if (ev.target.id === 'more-conns' && lastData) { allConns = !allConns; render(...lastData); }
+});
 $('refresh').onclick = () => { clearTimeout(timer); poll(); };
 $('lang').onclick = () => {
   lang = lang === 'zh' ? 'en' : 'zh';

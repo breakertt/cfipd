@@ -167,7 +167,7 @@ the daemon through its Unix socket.
 | `cfipd prefixes` | Inspect learned prefix statistics |
 | `cfipd relay` | Per-endpoint connection and traffic statistics |
 | `cfipd clients` | Relay connections and traffic per client IP since start (at most 256 clients) |
-| `cfipd conns` | Each open relay connection and the latest 100 closed ones: client, upstream, duration, traffic |
+| `cfipd conns` | Each open relay connection and the latest 100 closed ones: client, SNI, upstream, duration, traffic |
 | `cfipd scan` | Schedule a discovery probe |
 | `cfipd import FILE` | Import IPs or a CloudflareSpeedTest CSV as candidate seeds |
 | `cfipd promote IP` | Qualify a standby for a vacant active slot |
@@ -255,7 +255,9 @@ connection, it selects an Active IP at random, with weights in proportion to the
 score, and opens a
 connection to that Cloudflare edge (port 443 by default), then copies encrypted
 TLS bytes in both directions. TLS handshakes and HTTP requests are handled by the client
-and Cloudflare. Requests that reuse the same HTTPS connection keep the same
+and Cloudflare. For the connection list, cfipd reads the server name (SNI) from the
+plaintext TLS ClientHello as it passes; with Encrypted Client Hello (ECH), this is
+the public outer name. Requests that reuse the same HTTPS connection keep the same
 upstream; selection happens per connection, not per HTTP request. Swaps affect
 new HTTPS connections; established sessions keep their existing upstream.
 
