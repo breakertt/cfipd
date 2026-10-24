@@ -11,6 +11,13 @@ cfipd 透传加密数据，不解密或改写 HTTP 请求。
 发布产物包含静态二进制和带 systemd 服务的 Debian 安装包。默认接受东京、大阪、香港和
 新加坡的入口，可通过配置调整目标地区。
 
+## 不支持 QUIC
+
+cfipd 只转发 TCP，不转发基于 UDP 443 端口的 HTTP/3（QUIC）。它按 TCP 和 TLS 的测量结果
+选择入口；而且面向公网的 UDP relay 可能被利用来反射放大 QUIC 流量。先尝试 HTTP/3 的客户端
+在 UDP 不通时会退回 TCP。要让它立即退回，在客户端或路由器上拒绝（reject）发往 Cloudflare
+地址的 UDP 443。
+
 ## Quick Start
 
 在使用 systemd 的 Debian 或 Ubuntu 上，从

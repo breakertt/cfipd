@@ -14,6 +14,14 @@ includes a read-only web dashboard. Release binaries are static, and Debian
 packages include systemd services. The default target regions are Tokyo, Osaka,
 Hong Kong, and Singapore; they can be changed in the configuration.
 
+## No QUIC support
+
+cfipd relays TCP only. It does not forward HTTP/3 (QUIC), which runs over UDP
+port 443. Its edge selection measures TCP and TLS, and a UDP relay that faces the
+internet can reflect amplified QUIC traffic. Clients that try HTTP/3 first fall
+back to TCP when UDP fails. To make the fallback immediate, reject UDP port 443
+to Cloudflare addresses on the client or the router.
+
 ## Quick start
 
 On Debian or Ubuntu with systemd, download the `.deb` matching your machine from
