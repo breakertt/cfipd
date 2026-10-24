@@ -16,7 +16,9 @@ func testDaemon(t *testing.T) *daemon {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	d := newDaemon(defaultConfig(), st)
+	cfg := defaultConfig()
+	cfg.SpeedRecheck = Duration{} // fixture: no bandwidth downloads unless a test opts in
+	d := newDaemon(cfg, st)
 	d.ctx = context.Background() // unit tests drive apply/schedule without run()
 	return d
 }
@@ -64,4 +66,30 @@ func drainJobs(d *daemon) []job {
 			return out
 		}
 	}
+}
+
+// cancelledCtx lets goroutines started by schedule() or fillActive() exit
+// before any network I/O.
+func cancelledCtx() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}
+
+// sinActive is a healthy SIN active fixture with a full probe window.
+func sinActive(addr string, rtt float64) *IP {
+	ip := &IP{Addr: addr, Role: RoleActive, State: StateHealthy, Colo: "SIN", Baseline: rtt, LastSeen: t0}
+	for j := range 8 {
+		ip.Win = append(ip.Win, Obs{OK: true, RTT: rtt, Colo: "SIN", T: t0.Add(time.Duration(j-8) * time.Second)})
+	}
+	return ip
+}
+
+// freshStandby is a sampled standby fixture seen at t0.
+func freshStandby(addr, colo string, rtt float64) *IP {
+	ip := &IP{Addr: addr, Role: RoleStandby, Colo: colo, LastSeen: t0}
+	for j := range 8 {
+		ip.Win = append(ip.Win, Obs{OK: true, RTT: rtt, Colo: colo, T: t0.Add(time.Duration(j-8) * time.Second)})
+	}
+	return ip
 }

@@ -24,6 +24,7 @@ type relayTarget struct {
 	Addr   string
 	Weight float64
 	Stat   *RelayStat
+	Gen    uint64 // active generation at snapshot time; scopes dial feedback
 }
 
 type countWriter struct {
@@ -52,18 +53,15 @@ func (d *daemon) updateRelaySnap() {
 	var ts []relayTarget
 	for _, a := range d.pool.actives() {
 		st := d.relayStat(a.Addr)
-		lat := st.EMAms
-		if lat <= 0 {
-			lat = a.medianRTT()
-		}
+		lat := a.medianRTT() // probe metric for every active; relay EMA is TCP dial time
 		if lat <= 0 {
 			lat = 500
 		}
 		w := 1 / lat
-		if a.State == StateDegraded {
+		if a.State == StateDegraded || a.belowFloor(d.cfg) {
 			w /= 4
 		}
-		ts = append(ts, relayTarget{Addr: a.Addr, Weight: w, Stat: st})
+		ts = append(ts, relayTarget{Addr: a.Addr, Weight: w, Stat: st, Gen: a.Gen})
 	}
 	d.relaySnap.Store(ts)
 }
@@ -124,7 +122,7 @@ func (d *daemon) handleRelayConn(c net.Conn) {
 		t.Stat.Conns.Add(1)
 		start := time.Now()
 		conn, err := net.DialTimeout("tcp", net.JoinHostPort(t.Addr, port), d.cfg.RelayDial.Duration)
-		res := jobResult{job: job{kind: jRelay, ip: t.Addr}}
+		res := jobResult{job: job{kind: jRelay, ip: t.Addr, gen: t.Gen}}
 		res.probe.OK = err == nil
 		res.probe.Totalms = ms(time.Since(start))
 		if err != nil {

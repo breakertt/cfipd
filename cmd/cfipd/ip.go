@@ -66,8 +66,8 @@ type IP struct {
 	// first-ever discovery time and is never overwritten.
 	CycleSince time.Time `json:"cycle_since,omitempty"`
 
-	// Gen is per-IP scoped evidence for regular probe jobs: a late result
-	// from before this IP's last role change must not poison it.
+	// Gen is per-IP scoped evidence for every async job about this IP: a late
+	// result from before its last role change must not poison it.
 	Gen       uint64 `json:"gen,omitempty"`
 	Promoting bool   `json:"promoting,omitempty"`
 
@@ -89,6 +89,12 @@ func (ip *IP) okRTTs() []float64 {
 }
 
 func (ip *IP) medianRTT() float64 { return median(ip.okRTTs()) }
+
+// belowFloor reports whether the latest bandwidth sample fell under the
+// promotion floor.
+func (ip *IP) belowFloor(cfg *Config) bool {
+	return !ip.SpeedAt.IsZero() && ip.Speed < cfg.PromoteMinMbps
+}
 
 func (ip *IP) jitter() float64 {
 	xs := ip.okRTTs()
@@ -143,7 +149,6 @@ type Pool struct {
 	cfg *Config
 	ips map[string]*IP
 	rnd *rand.Rand
-	gen uint64 // bumped on every role change/removal; async results carry it
 	pk  *pkPersist
 
 	day       string         // UTC day of dayCounts/dayBytes
@@ -167,12 +172,7 @@ func (p *Pool) ensure(addr string, now time.Time) *IP {
 	return ip
 }
 
-func (p *Pool) remove(addr string) {
-	if _, ok := p.ips[addr]; ok {
-		delete(p.ips, addr)
-		p.gen++
-	}
-}
+func (p *Pool) remove(addr string) { delete(p.ips, addr) }
 
 func (p *Pool) byRole(r Role) []*IP {
 	var out []*IP
@@ -520,7 +520,6 @@ func (p *Pool) applyCandidate(ip *IP, r ProbeResult, now time.Time) []string {
 	ip.ConsecFail = 0
 	ip.CooldownUntil = time.Time{}
 	ip.NextProbe = now
-	p.gen++
 	ip.Gen++
 	return []string{fmt.Sprintf("%s candidate -> standby (colo=%s med=%.0fms)", ip.Addr, ip.Colo, med)}
 }
@@ -538,7 +537,6 @@ func (p *Pool) cooldown(ip *IP, reason string, now time.Time) {
 	ip.Promoting = false
 	ip.Win = nil
 	ip.CycleSince = now // fresh validation window after cooldown; FirstSeen kept
-	p.gen++
 	ip.Gen++
 }
 
@@ -553,7 +551,6 @@ func (p *Pool) promoteActive(ip *IP, med float64, now time.Time) {
 	ip.CooldownUntil = time.Time{}
 	ip.DegradedSince = time.Time{}
 	ip.NextProbe = now.Add(p.jitterDown(ip.healthEvery(p.cfg)))
-	p.gen++
 	ip.Gen++
 }
 
@@ -566,7 +563,6 @@ func (p *Pool) demoteToStandby(ip *IP, now time.Time) {
 	ip.RelayFail = 0
 	ip.DegradedSince = time.Time{}
 	ip.NextProbe = now
-	p.gen++
 	ip.Gen++
 }
 
@@ -578,23 +574,9 @@ func (p *Pool) swapPK(challenger, incumbent *IP, med float64, now time.Time) {
 	p.promoteActive(challenger, med, now)
 }
 
-// pickForPromotion picks the best standby satisfying diversity constraints.
-func (p *Pool) pickForPromotion() *IP {
-	actives := p.actives()
-	for _, sb := range p.rankedStandbys() {
-		if sb.Promoting {
-			continue
-		}
-		if p.diverseWith(sb, actives) {
-			return sb
-		}
-	}
-	return nil
-}
-
 // diverseWith reports whether adding sb to the given actives respects the
-// prefix/colo diversity caps.
-func (p *Pool) diverseWith(sb *IP, actives []*IP) bool {
+// per-prefix cap and, unless relaxColo, the per-colo cap.
+func (p *Pool) diverseWith(sb *IP, actives []*IP, relaxColo bool) bool {
 	pfxN, coloN := 0, 0
 	for _, a := range actives {
 		if BlockKey(a.Addr) == BlockKey(sb.Addr) {
@@ -604,7 +586,19 @@ func (p *Pool) diverseWith(sb *IP, actives []*IP) bool {
 			coloN++
 		}
 	}
-	return pfxN < p.cfg.MaxActivePerPrefix && coloN < p.cfg.MaxActivePerColo
+	return pfxN < p.cfg.MaxActivePerPrefix && (relaxColo || coloN < p.cfg.MaxActivePerColo)
+}
+
+// swapDiverse reports whether sb may take inc's active slot. A same-colo swap
+// leaves colo counts unchanged, so only the per-prefix cap applies to it.
+func (p *Pool) swapDiverse(sb, inc *IP) bool {
+	var others []*IP
+	for _, a := range p.actives() {
+		if a != inc {
+			others = append(others, a)
+		}
+	}
+	return p.diverseWith(sb, others, sb.Colo != "" && sb.Colo == inc.Colo)
 }
 
 // pruneCandidates expires stale candidates and enforces the cap. Nodes in

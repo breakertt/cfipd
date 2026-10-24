@@ -124,6 +124,7 @@ like this:
 | `health_interval` | Starting health-check interval | `"10s"` |
 | `scan_v6_ratio` | Share of new-address discovery assigned to IPv6 | `0.2` |
 | `promote_min_mbps` | Minimum throughput required for promotion | `30` |
+| `speed_recheck` | Interval between bandwidth rechecks of each active; `"0s"` disables them | `"12h"` |
 
 The full configuration is defined in
 [config.go](https://github.com/breakertt/cfipd/blob/main/cmd/cfipd/config.go). A direct run
@@ -173,6 +174,10 @@ stabilizes, and accelerate on anomalies. Two preferred standbys are checked abou
 every five minutes; other backups about every thirty minutes. Slow endpoints
 that still work continue serving until a replacement qualifies.
 
+Fill uses a backup from a different colo when one is available
+(`max_active_per_colo`, default 2). If no such backup can be tried, fill uses a
+backup from the same colo. The limit of one active per /24 always applies.
+
 With default settings, elective replacement uses a fresh paired comparison (PK):
 both endpoints must pass availability checks, and the challenger must improve median HTTPS probe time
 by at least 20% and 30 ms without worsening p90. A second comparison of the same
@@ -180,7 +185,15 @@ pair, at least five minutes later, confirms the result. A bandwidth comparison
 then requires at least 30 Mbps and 80% of the incumbent's measured throughput;
 full bandwidth comparisons are limited to two per day. During a new state's
 first 24 hours, PK records proposed swaps without applying them. Fault recovery
-still operates, and the observation deadline survives restarts.
+still operates, and the observation deadline survives restarts. PK also runs
+when the pool has fewer actives than `active_count` and no backup can fill it.
+
+Each active gets a new bandwidth measurement every 12 hours (`speed_recheck`).
+Only one download runs at a time. An active under 30 Mbps continues to serve,
+with a quarter of its normal relay weight. For each such result, the best
+standby that fits gets one full promotion test. If it passes, the two endpoints
+swap roles. With three actives, rechecks use up to six downloads a day, and
+replacement tests use up to six more.
 
 The implementation uses TCP passthrough to carry HTTPS. For each new client
 connection, it selects an Active IP with latency-based weights and opens a
@@ -200,7 +213,8 @@ new HTTPS connections; established sessions keep their existing upstream.
   hostname. After changing networks, preserve the old state and start fresh
   learning. There is no city or ISP-specific binding.
 - Dashboard timing is HTTPS request duration, not pure TCP RTT. Displayed
-  bandwidth is a historical qualification measurement, not live throughput.
+  bandwidth is the most recent single-connection download test (promotion, PK,
+  or recheck), not live throughput.
   The default download test is capped at 99,999,999 bytes and ten seconds.
 - The relay carries HTTPS over TCP; HTTP/3 over QUIC/UDP is outside its scope.
   It retries other active endpoints when an upstream

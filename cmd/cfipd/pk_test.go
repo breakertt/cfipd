@@ -83,7 +83,7 @@ func TestPKObserveOnlyWindow(t *testing.T) {
 	sb := &IP{Addr: "2.2.2.2", Role: RoleStandby, Colo: "KIX"}
 	d.pool.ips[inc.Addr], d.pool.ips[sb.Addr] = inc, sb
 	mk := func() jobResult {
-		return jobResult{job: job{kind: jSpeed, ip: sb.Addr, peer: inc.Addr, gen: d.pool.gen},
+		return jobResult{job: job{kind: jSpeed, ip: sb.Addr, peer: inc.Addr, gen: sb.Gen, peerGen: inc.Gen},
 			ok: true, speed: SpeedResult{Mbps: 100}, speed2: SpeedResult{Mbps: 90}}
 	}
 	d.applySpeed(mk(), t0)
@@ -92,7 +92,6 @@ func TestPKObserveOnlyWindow(t *testing.T) {
 	}
 	d.pool.pk.ObserveUntil = t0.Add(-time.Hour)
 	r := mk()
-	r.job.gen = d.pool.gen // gen unchanged by observe-only decision
 	d.applySpeed(r, t0)
 	if sb.Role != RoleActive || inc.Role != RoleStandby {
 		t.Fatal("after warm-up a confirmed winner should swap")
@@ -104,7 +103,7 @@ func TestPKObserveOnlyWindow(t *testing.T) {
 func TestPKPendingAgeNotResetByEarlyWin(t *testing.T) {
 	d, inc, sb := pkPairFixture(t)
 	mk := func() jobResult {
-		r := jobResult{job: job{kind: jPK, ip: sb.Addr, peer: inc.Addr, gen: d.pool.gen}, ok: true, pk: &pkRun{}}
+		r := jobResult{job: job{kind: jPK, ip: sb.Addr, peer: inc.Addr, gen: sb.Gen, peerGen: inc.Gen}, ok: true, pk: &pkRun{}}
 		for range 8 {
 			r.pk.challRTT = append(r.pk.challRTT, 150)
 			r.pk.incRTT = append(r.pk.incRTT, 400)
@@ -188,5 +187,61 @@ func TestMissingBandwidthReferenceIsNotAWin(t *testing.T) {
 		speed: SpeedResult{Mbps: 100, Bytes: 1024, Colo: "KIX"}, speed2: SpeedResult{Err: "status 403"}}, t0)
 	if sb.Role != RoleStandby || inc.Role != RoleActive {
 		t.Fatal("an unavailable incumbent bandwidth reference cannot authorize an elective swap")
+	}
+}
+
+// TestPKRunsWhenFillCannotComplete: PK must still improve a short pool when
+// fill has no backup it can try.
+func TestPKRunsWhenFillCannotComplete(t *testing.T) {
+	d, _, sb := pkPairFixture(t)
+	d.ctx = cancelledCtx()
+	d.pool.cooldown(d.pool.ips["198.18.0.1"], "fixture failure", t0) // 2 actives left
+	d.promoteFail[sb.Addr] = t0                                      // the only backup just failed promotion
+	d.schedule(t0)
+	if !d.pkRunning || d.promoting {
+		t.Fatal("PK must run when fill cannot complete the pool")
+	}
+}
+
+// TestPKSwapCommitsWhenPoolShort: a swap is one-for-one, so a short pool must
+// not block it.
+func TestPKSwapCommitsWhenPoolShort(t *testing.T) {
+	d, inc, sb := pkPairFixture(t)
+	d.pool.pk.ObserveUntil = t0.Add(-time.Hour)
+	d.pool.cooldown(d.pool.ips["198.18.0.1"], "fixture failure", t0)
+	d.applySpeed(jobResult{job: job{kind: jSpeed, ip: sb.Addr, peer: inc.Addr}, ok: true,
+		speed: SpeedResult{Mbps: 100, Colo: "KIX"}, speed2: SpeedResult{Mbps: 90, Colo: "HKG"}}, t0)
+	if sb.Role != RoleActive || inc.Role != RoleStandby {
+		t.Fatal("a qualified one-for-one swap must commit in a short pool")
+	}
+}
+
+// TestPKSameColoSwapAtColoCap: replacing an active with a backup of the same
+// colo leaves colo counts unchanged, so it must pass a pool at the cap.
+func TestPKSameColoSwapAtColoCap(t *testing.T) {
+	d := testDaemon(t)
+	for _, a := range []*IP{sinActive("198.18.0.1", 700), sinActive("198.18.1.1", 700), sinActive("198.18.2.1", 700)} {
+		d.pool.ips[a.Addr] = a
+	}
+	sb := freshStandby("198.18.3.1", "SIN", 270)
+	d.pool.ips[sb.Addr] = sb
+	if challenger, _ := d.pool.pickPKPair(t0); challenger != sb {
+		t.Fatal("a same-colo challenger must be eligible when the pool is at the per-colo cap")
+	}
+}
+
+// TestPKStaleWhenIncumbentChanges: a bandwidth result is void once the
+// incumbent's generation moves, even if it holds the same role again.
+func TestPKStaleWhenIncumbentChanges(t *testing.T) {
+	d, inc, sb := pkPairFixture(t)
+	d.pool.pk.ObserveUntil = t0.Add(-time.Hour)
+	r := jobResult{job: job{kind: jSpeed, ip: sb.Addr, peer: inc.Addr, gen: sb.Gen, peerGen: inc.Gen}, ok: true,
+		speed: SpeedResult{Mbps: 100, Colo: "KIX"}, speed2: SpeedResult{Mbps: 90, Colo: "HKG"}}
+	d.pool.demoteToStandby(inc, t0)
+	d.pool.promoteActive(inc, 400, t0)
+	d.pkRunning = true
+	d.apply(r)
+	if sb.Role != RoleStandby || inc.Role != RoleActive || d.pkRunning {
+		t.Fatal("a stale incumbent generation must void the swap and clear the PK flag")
 	}
 }

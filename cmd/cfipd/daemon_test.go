@@ -87,7 +87,7 @@ func TestStalePromoteResultRejected(t *testing.T) {
 	sb := &IP{Addr: "2.2.2.2", Role: RoleStandby, Colo: "NRT", Promoting: true}
 	d.pool.ips[sb.Addr] = sb
 	d.promoting = true
-	d.apply(jobResult{job: job{kind: jPromote, ip: sb.Addr, gen: d.pool.gen + 1},
+	d.apply(jobResult{job: job{kind: jPromote, ip: sb.Addr, gen: sb.Gen + 1},
 		ok: true, med: 100, speed: SpeedResult{Mbps: 100}})
 	if sb.Role != RoleStandby {
 		t.Fatal("stale-generation promote result must not change roles")
@@ -190,7 +190,7 @@ func TestPromoteFailureBacksOff(t *testing.T) {
 	}
 	d.pool.ips[bad.Addr], d.pool.ips[good.Addr] = bad, good
 	d.promoting = true
-	d.apply(jobResult{job: job{kind: jPromote, ip: bad.Addr, gen: d.pool.gen}, err: "speed 5.0Mbps < 30.0Mbps"})
+	d.apply(jobResult{job: job{kind: jPromote, ip: bad.Addr, gen: bad.Gen}, err: "speed 5.0Mbps < 30.0Mbps"})
 	if _, failed := d.promoteFail[bad.Addr]; !failed {
 		t.Fatal("failed promotion must record a retry backoff")
 	}
@@ -237,12 +237,17 @@ func TestHealthyFullPoolsStillAdmitNewCredibleImprovement(t *testing.T) {
 
 func TestGenerationZeroAlsoExpires(t *testing.T) {
 	d, inc, sb := pkPairFixture(t)
-	d.pool.gen = 0
-	d.pool.cooldown(inc, "fixture failure", t0)
-	d.apply(jobResult{job: job{kind: jPromote, ip: sb.Addr, gen: 0}, ok: true, med: 150,
+	d.pool.cooldown(inc, "fixture failure", t0) // open an active slot
+	dispatched := sb.Gen
+	if dispatched != 0 {
+		t.Fatal("fixture: the standby must start at generation zero")
+	}
+	d.pool.promoteActive(sb, 150, t0)
+	d.pool.demoteToStandby(sb, t0) // the standby changed role and came back
+	d.apply(jobResult{job: job{kind: jPromote, ip: sb.Addr, gen: dispatched}, ok: true, med: 150,
 		speed: SpeedResult{Mbps: 100}, probe: okProbe(150, "KIX")})
 	if sb.Role != RoleStandby {
-		t.Fatal("a job from generation zero must be rejected after the pool generation changes")
+		t.Fatal("a job from generation zero must be rejected after the standby's generation changes")
 	}
 }
 
@@ -275,7 +280,7 @@ func TestCountsPhysicalPromotionProbes(t *testing.T) {
 	d.cfg.PromoteInterval = Duration{}
 	sb := &IP{Addr: "127.0.0.1", Role: RoleStandby, Colo: "NRT", LastSeen: time.Now()}
 	d.pool.ips[sb.Addr] = sb
-	r := d.execPromote(context.Background(), job{kind: jPromote, ip: sb.Addr, limit: 1000, gen: d.pool.gen})
+	r := d.execPromote(context.Background(), job{kind: jPromote, ip: sb.Addr, limit: 1000, gen: sb.Gen})
 	if !r.ok {
 		t.Fatalf("fixture promotion failed: %s", r.err)
 	}
@@ -288,5 +293,70 @@ func TestCountsPhysicalPromotionProbes(t *testing.T) {
 	}
 	if int64(count) < traces.Load() {
 		t.Fatalf("reported %d probes but fixture received %d physical trace requests", count, traces.Load())
+	}
+}
+
+// TestPromotionSurvivesUnrelatedCandidateChurn: candidates leaving the pool
+// must not invalidate the promotion test of an unrelated standby.
+func TestPromotionSurvivesUnrelatedCandidateChurn(t *testing.T) {
+	d, inc, sb := pkPairFixture(t)
+	d.pool.cooldown(inc, "fixture failure", t0) // open an active slot
+	dispatched := sb.Gen
+	d.pool.ensure("198.20.0.1", t0)
+	d.pool.remove("198.20.0.1")
+	d.apply(jobResult{job: job{kind: jPromote, ip: sb.Addr, gen: dispatched}, ok: true, med: 150,
+		speed: SpeedResult{Mbps: 100}, probe: okProbe(150, "KIX")})
+	if sb.Role != RoleActive {
+		t.Fatal("a promotion result must stay valid while its standby keeps its role")
+	}
+}
+
+// TestFillRelaxesColoCapOnlyWithoutDiverseStandby: with only same-colo
+// backups, fill exceeds the per-colo cap instead of staying short; a backup
+// within the cap still wins, and the per-prefix cap never relaxes.
+func TestFillRelaxesColoCapOnlyWithoutDiverseStandby(t *testing.T) {
+	setup := func(standbys ...*IP) *daemon {
+		d := testDaemon(t)
+		d.ctx = cancelledCtx()
+		for _, a := range []*IP{sinActive("198.18.0.1", 700), sinActive("198.18.1.1", 700)} {
+			d.pool.ips[a.Addr] = a
+		}
+		for _, sb := range standbys {
+			d.pool.ips[sb.Addr] = sb
+		}
+		return d
+	}
+	sin := freshStandby("198.18.2.1", "SIN", 270)
+	setup(sin).fillActive(t0)
+	if !sin.Promoting {
+		t.Fatal("with only same-colo backups, fill must exceed the per-colo cap")
+	}
+	sin, nrt := freshStandby("198.18.2.1", "SIN", 270), freshStandby("198.18.3.1", "NRT", 300)
+	setup(sin, nrt).fillActive(t0)
+	if sin.Promoting || !nrt.Promoting {
+		t.Fatal("a backup within the per-colo cap must be preferred over a relaxed one")
+	}
+	samePrefix := freshStandby("198.18.0.2", "SIN", 270)
+	setup(samePrefix).fillActive(t0)
+	if samePrefix.Promoting {
+		t.Fatal("the per-prefix cap must hold even when the per-colo cap relaxes")
+	}
+}
+
+// TestRelaxedFillCommitsSameColoActive: a promotion dispatched under the
+// relaxed per-colo cap commits under the same cap; a strict one does not.
+func TestRelaxedFillCommitsSameColoActive(t *testing.T) {
+	for _, relax := range []bool{true, false} {
+		d := testDaemon(t)
+		for _, a := range []*IP{sinActive("198.18.0.1", 700), sinActive("198.18.1.1", 700)} {
+			d.pool.ips[a.Addr] = a
+		}
+		sb := freshStandby("198.18.2.1", "SIN", 270)
+		d.pool.ips[sb.Addr] = sb
+		d.apply(jobResult{job: job{kind: jPromote, ip: sb.Addr, gen: sb.Gen, relax: relax}, ok: true, med: 270,
+			speed: SpeedResult{Mbps: 100}, probe: okProbe(270, "SIN")})
+		if got := sb.Role == RoleActive; got != relax {
+			t.Fatalf("relax=%v: promoted=%v", relax, got)
+		}
 	}
 }

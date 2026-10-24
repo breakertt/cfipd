@@ -47,8 +47,7 @@ type pkPending struct {
 // one per 30m; a pending confirmation round follows its own due time. Failed
 // pairs back off instead of retriggering on unchanged evidence.
 func (d *daemon) evalPK(now time.Time) {
-	cfg := d.cfg
-	if d.promoting || d.pkRunning || len(d.pool.actives()) != cfg.ActiveCount {
+	if d.promoting || d.pkRunning || d.rechecking {
 		return
 	}
 	sb, worst := d.nextPKPair(now)
@@ -61,7 +60,7 @@ func (d *daemon) evalPK(now time.Time) {
 	}
 	d.pkLastEval = now
 	d.pkRunning = true
-	j := job{kind: jPK, ip: sb.Addr, peer: worst.Addr, gen: d.pool.gen}
+	j := job{kind: jPK, ip: sb.Addr, peer: worst.Addr, gen: sb.Gen, peerGen: worst.Gen}
 	log.Printf("PK probe: %s (med=%.0fms) vs %s (med=%.0fms)", sb.Addr, sb.medianRTT(), worst.Addr, worst.medianRTT())
 	go func() { d.sendResult(d.execPK(d.ctx, j)) }()
 }
@@ -97,13 +96,7 @@ func (p *Pool) pkPairEligible(sb, inc *IP, now time.Time) bool {
 	if med > reference-30 || med > 0.8*reference {
 		return false
 	}
-	others := make([]*IP, 0, p.cfg.ActiveCount-1)
-	for _, a := range p.actives() {
-		if a != inc {
-			others = append(others, a)
-		}
-	}
-	return p.diverseWith(sb, others)
+	return p.swapDiverse(sb, inc)
 }
 
 // pickPKPair targets the worst usable active with a fresh credible challenger.
@@ -222,14 +215,15 @@ func (d *daemon) applyPK(r jobResult, now time.Time) {
 	d.pool.pk.BWUsed++
 	d.pkRunning = true
 	d.pkLastRun = r.pk // fresh paired evidence carries into the bandwidth stage
-	j := job{kind: jSpeed, ip: r.ip, peer: r.peer, gen: d.pool.gen}
+	j := job{kind: jSpeed, ip: r.ip, peer: r.peer, gen: sb.Gen, peerGen: inc.Gen}
 	log.Printf("PK %s confirmed (%s), bandwidth check (%d/2 today)", r.ip, why, d.pool.pk.BWUsed)
 	go func() { d.sendResult(d.execSpeed(d.ctx, j)) }()
 }
 
 // applySpeed takes the final PK decision. Both serial measurements must be
 // valid with acceptable colos — a missing incumbent reference is inconclusive,
-// never a win. Roles, capacity and diversity are revalidated at commit time.
+// never a win. Roles and diversity are revalidated at commit time; the swap is
+// one-for-one, so a short pool does not block it.
 // The 80%-of-incumbent guard is a provisional starting heuristic, to be
 // calibrated from observed PK rounds.
 func (d *daemon) applySpeed(r jobResult, now time.Time) {
@@ -241,21 +235,12 @@ func (d *daemon) applySpeed(r jobResult, now time.Time) {
 	if sb == nil || inc == nil || sb.Role != RoleStandby || inc.Role != RoleActive {
 		return
 	}
-	if len(d.pool.actives()) != d.cfg.ActiveCount {
-		return // pool shape changed since dispatch; an elective swap must not shrink it
-	}
-	others := make([]*IP, 0, d.cfg.ActiveCount-1)
-	for _, a := range d.pool.actives() {
-		if a != inc {
-			others = append(others, a)
-		}
-	}
 	win := r.speed.Err == "" && r.speed2.Err == "" &&
 		r.speed.Mbps >= d.cfg.PromoteMinMbps && r.speed2.Mbps > 0 &&
 		r.speed.Mbps >= 0.8*r.speed2.Mbps &&
 		(r.speed.Colo == "" || d.cfg.coloAllowed(r.speed.Colo)) &&
 		(r.speed2.Colo == "" || d.cfg.coloAllowed(r.speed2.Colo)) &&
-		d.pool.diverseWith(sb, others)
+		d.pool.swapDiverse(sb, inc)
 	d.store.Log(map[string]any{"type": "pk_speed", "challenger": r.ip, "incumbent": r.peer,
 		"chall_mbps": r.speed.Mbps, "inc_mbps": r.speed2.Mbps, "chall_err": r.speed.Err,
 		"inc_err": r.speed2.Err, "win": win, "t": now})

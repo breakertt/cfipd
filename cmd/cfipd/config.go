@@ -72,6 +72,7 @@ type Config struct {
 	PromoteMinMbps   float64  `json:"promote_min_mbps"`
 	SpeedBytes       int64    `json:"speed_bytes"`
 	SpeedTimeout     Duration `json:"speed_timeout"`
+	SpeedRecheck     Duration `json:"speed_recheck"` // re-measure each active this often; 0 disables
 
 	MaxActivePerPrefix int `json:"max_active_per_prefix24"`
 	MaxActivePerColo   int `json:"max_active_per_colo"`
@@ -129,6 +130,7 @@ func defaultConfig() *Config {
 		PromoteMinMbps:   30,
 		SpeedBytes:       99_999_999,
 		SpeedTimeout:     Duration{10 * time.Second},
+		SpeedRecheck:     Duration{12 * time.Hour},
 
 		MaxActivePerPrefix: 1,
 		MaxActivePerColo:   2,

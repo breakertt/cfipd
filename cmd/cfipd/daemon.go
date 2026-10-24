@@ -20,22 +20,21 @@ const (
 	jPK
 	jSpeed
 	jRelay
+	jRecheck
 )
 
 func (k jobKind) String() string {
-	return [...]string{"health", "standby", "validate", "discover", "promote", "pk", "speed", "relay"}[k]
+	return [...]string{"health", "standby", "validate", "discover", "promote", "pk", "speed", "relay", "recheck"}[k]
 }
 
-// longJob reports whether the job is scoped to the pool generation (regular
-// probes are scoped to their IP's own generation instead).
-func (k jobKind) longJob() bool { return k == jPromote || k == jPK || k == jSpeed }
-
 type job struct {
-	kind  jobKind
-	ip    string
-	peer  string  // PK incumbent / speed comparison partner
-	limit float64 // median RTT ceiling snapshotted at dispatch
-	gen   uint64  // dispatch-time generation evidence (pool gen for long jobs, IP gen otherwise)
+	kind    jobKind
+	ip      string
+	peer    string  // PK incumbent / speed comparison partner
+	limit   float64 // median RTT ceiling snapshotted at dispatch
+	gen     uint64  // dispatch-time generation of ip
+	peerGen uint64  // dispatch-time generation of peer
+	relax   bool    // fill promotion under a relaxed per-colo cap
 }
 
 type jobResult struct {
@@ -82,6 +81,10 @@ type daemon struct {
 
 	promoteFail map[string]time.Time // bound mandatory-promotion retries
 
+	rechecking bool
+	recheckAt  map[string]time.Time // last bandwidth recheck dispatch per active
+	lowBWTried map[string]time.Time // active -> SpeedAt of the sample whose replacement was tried
+
 	relaySnap   atomic.Value // []relayTarget, written by event loop, read by relay goroutines
 	relayStats  map[string]*RelayStat
 	ctx         context.Context
@@ -105,6 +108,8 @@ func newDaemon(cfg *Config, store *Store) *daemon {
 		relayStats:  map[string]*RelayStat{},
 		pkFailUntil: map[string]time.Time{},
 		promoteFail: map[string]time.Time{},
+		recheckAt:   map[string]time.Time{},
+		lowBWTried:  map[string]time.Time{},
 		hourCounts:  map[string]int{},
 		hourStart:   time.Now().Truncate(time.Hour),
 	}
@@ -341,12 +346,17 @@ func (d *daemon) schedule(now time.Time) {
 		}
 	}
 
-	// Hard-failure fill has priority over any elective PK.
-	if !d.promoting && !d.pkRunning && len(d.pool.actives()) < cfg.ActiveCount {
-		d.fillActive(now)
+	// Hard-failure fill has priority; PK may still improve a pool that fill
+	// cannot complete.
+	filling := false
+	if !d.promoting && !d.pkRunning && !d.rechecking && len(d.pool.actives()) < cfg.ActiveCount {
+		filling = d.fillActive(now)
 	}
-
-	d.evalPK(now)
+	if !filling {
+		d.replaceLowBandwidth(now)
+		d.evalPK(now)
+	}
+	d.recheckBandwidth(now)
 	d.rollHour(now)
 	d.updateRelaySnap()
 }
@@ -360,8 +370,23 @@ func sortByNextProbe(ips []*IP) {
 }
 
 // fillActive tries standbys best-first; a recently failed promotion backs off
-// instead of re-running a 99MB test every tick.
-func (d *daemon) fillActive(now time.Time) {
+// instead of re-running a 99MB test every tick. The per-colo cap relaxes only
+// when no backup within it can be tried, so a single reachable colo still
+// fills the pool. It reports whether fill work is in progress.
+func (d *daemon) fillActive(now time.Time) bool {
+	for _, relax := range []bool{false, true} {
+		fits := func(sb *IP) bool { return d.pool.diverseWith(sb, d.pool.actives(), relax) }
+		if d.tryPromote(now, fits, job{relax: relax}) {
+			return true
+		}
+	}
+	return false
+}
+
+// tryPromote starts a promotion test for the best standby that fits, skipping
+// backups that are busy or backed off. A stale backup is refreshed first. It
+// reports whether it found a standby to work on.
+func (d *daemon) tryPromote(now time.Time, fits func(*IP) bool, j job) bool {
 	for _, sb := range d.pool.rankedStandbys() {
 		if sb.Promoting {
 			continue
@@ -369,26 +394,27 @@ func (d *daemon) fillActive(now time.Time) {
 		if t, failed := d.promoteFail[sb.Addr]; failed && now.Sub(t) < 10*time.Minute {
 			continue
 		}
-		if !d.pool.diverseWith(sb, d.pool.actives()) {
+		if !fits(sb) {
 			continue
 		}
 		if now.Sub(sb.LastSeen) > 2*time.Minute {
 			if d.enqueue(job{kind: jStandby, ip: sb.Addr, gen: sb.Gen}) {
 				sb.NextProbe = now.Add(d.pool.jitterDown(d.pool.standbyEvery(sb)))
 			}
-			return // refresh the stale backup before trusting it
+			return true // refresh the stale backup before trusting it
 		}
-		d.startPromotion(sb)
-		return
+		d.startPromotion(sb, j)
+		return true
 	}
+	return false
 }
 
 // startPromotion runs the promotion test on a dedicated goroutine: it must
 // never wait in the shared job queue behind discovery floods.
-func (d *daemon) startPromotion(sb *IP) {
+func (d *daemon) startPromotion(sb *IP, j job) {
 	sb.Promoting = true
 	d.promoting = true
-	j := job{kind: jPromote, ip: sb.Addr, limit: d.pool.rttLimit(), gen: d.pool.gen}
+	j.kind, j.ip, j.limit, j.gen = jPromote, sb.Addr, d.pool.rttLimit(), sb.Gen
 	log.Printf("promotion test: %s (colo=%s med=%.0fms)", sb.Addr, sb.Colo, sb.medianRTT())
 	go func() { d.sendResult(d.execPromote(d.ctx, j)) }()
 }
@@ -421,14 +447,18 @@ func (d *daemon) apply(r jobResult) {
 	now := time.Now()
 	ip := d.pool.get(r.ip)
 
-	// Stale evidence is dropped: long jobs are scoped to the pool generation,
-	// regular probes to their IP's own generation. Generation zero is a real
-	// captured generation, not an opt-out.
+	// Stale evidence is dropped: a result is scoped to the generation of each
+	// IP it is about, so unrelated pool churn does not void it. Pool shape is
+	// revalidated at commit time. Generation zero is a real captured
+	// generation, not an opt-out.
 	stale := false
-	if r.job.kind.longJob() {
-		stale = r.job.gen != d.pool.gen
-	} else if ip != nil && r.job.kind != jDiscover {
+	if ip != nil && r.job.kind != jDiscover {
 		stale = r.job.gen != ip.Gen
+	}
+	if r.peer != "" {
+		if peer := d.pool.get(r.peer); peer == nil || peer.Gen != r.job.peerGen {
+			stale = true
+		}
 	}
 	// Physical work is counted and fed to prefix learning regardless of the
 	// decision outcome or staleness — the requests really happened.
@@ -445,6 +475,9 @@ func (d *daemon) apply(r jobResult) {
 		}
 		if r.job.kind == jPK || r.job.kind == jSpeed {
 			d.pkRunning = false
+		}
+		if r.job.kind == jRecheck {
+			d.rechecking = false
 		}
 		return
 	}
@@ -505,8 +538,24 @@ func (d *daemon) apply(r jobResult) {
 		if r.err == "cancelled" {
 			return // neutral: no punishment for a cancelled test
 		}
-		if r.ok && ip.Role == RoleStandby && len(d.pool.actives()) < d.cfg.ActiveCount &&
-			d.pool.diverseWith(ip, d.pool.actives()) {
+		inc := d.pool.get(r.peer) // set when the test replaces a below-floor active
+		switch {
+		case !r.ok:
+			// Bound the retry: back this standby off instead of re-running a
+			// 99MB test every tick; other valid backups are tried meanwhile.
+			d.promoteFail[ip.Addr] = now
+			d.logEvent(fmt.Sprintf("%s promotion failed: %s", r.ip, r.err), now)
+		case ip.Role == RoleStandby && inc != nil && inc.Role == RoleActive && inc.belowFloor(d.cfg) &&
+			d.pool.swapDiverse(ip, inc):
+			delete(d.promoteFail, ip.Addr)
+			ip.Speed, ip.SpeedAt = r.speed.Mbps, now
+			d.pool.swapPK(ip, inc, r.med, now)
+			d.logEvent(fmt.Sprintf("%s replaced below-floor active %s (%.1f vs %.1f Mbps)",
+				ip.Addr, inc.Addr, r.speed.Mbps, inc.Speed), now)
+			d.store.Log(map[string]any{"type": "role", "ip": ip.Addr, "to": "active", "replaces": inc.Addr,
+				"med_ms": r.med, "jitter_ms": r.jit, "mbps": r.speed.Mbps, "colo": r.probe.Colo, "t": now})
+		case ip.Role == RoleStandby && inc == nil && len(d.pool.actives()) < d.cfg.ActiveCount &&
+			d.pool.diverseWith(ip, d.pool.actives(), r.relax):
 			delete(d.promoteFail, ip.Addr)
 			ip.Speed, ip.SpeedAt = r.speed.Mbps, now
 			d.pool.promoteActive(ip, r.med, now)
@@ -514,19 +563,16 @@ func (d *daemon) apply(r jobResult) {
 				ip.Addr, r.probe.Colo, r.med, r.jit, r.speed.Mbps), now)
 			d.store.Log(map[string]any{"type": "role", "ip": ip.Addr, "to": "active",
 				"med_ms": r.med, "jitter_ms": r.jit, "mbps": r.speed.Mbps, "colo": r.probe.Colo, "t": now})
-		} else if r.ok {
-			d.logEvent(fmt.Sprintf("%s promotion passed but not applicable now (actives full or diversity)", r.ip), now)
-		} else {
-			// Bound the retry: back this standby off instead of re-running a
-			// 99MB test every tick; other valid backups are tried meanwhile.
-			d.promoteFail[ip.Addr] = now
-			d.logEvent(fmt.Sprintf("%s promotion failed: %s", r.ip, r.err), now)
+		default:
+			d.logEvent(fmt.Sprintf("%s promotion passed but not applicable now (pool changed)", r.ip), now)
 		}
 	case jPK:
 		d.pkRunning = false
 		d.applyPK(r, now)
 	case jSpeed:
 		d.applySpeed(r, now)
+	case jRecheck:
+		d.applyRecheck(r, ip, now)
 	case jRelay:
 		if ip == nil || ip.Role != RoleActive {
 			return
@@ -558,7 +604,7 @@ func (d *daemon) apply(r jobResult) {
 		}
 	}
 
-	if r.job.kind != jPromote && r.job.kind != jPK && r.job.kind != jSpeed {
+	if r.job.kind != jPromote && r.job.kind != jPK && r.job.kind != jSpeed && r.job.kind != jRecheck {
 		d.store.Log(map[string]any{
 			"type": "obs", "kind": r.job.kind.String(), "ip": r.ip,
 			"ok": r.probe.OK, "rtt_ms": r.probe.Totalms, "colo": r.probe.Colo,
@@ -601,6 +647,11 @@ func (d *daemon) countPhysical(r jobResult, now time.Time, ip *IP) {
 	case jSpeed:
 		d.countProbe(jSpeed, 2)
 		d.pool.dayBytes += r.speed.Bytes + r.speed2.Bytes
+	case jRecheck:
+		if r.speed.Bytes > 0 || r.speed.Err != "" {
+			d.countProbe(jSpeed, 1)
+			d.pool.dayBytes += r.speed.Bytes
+		}
 	}
 }
 

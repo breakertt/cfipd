@@ -139,3 +139,57 @@ func TestRelayConnectionsAreNotSyntheticProbeUsage(t *testing.T) {
 		t.Fatal("real connection accounting must remain intact")
 	}
 }
+
+// TestRelayWeightsUseProbeMedian: every active is weighted by the same probe
+// metric; TCP dial time from relay traffic is a different unit.
+func TestRelayWeightsUseProbeMedian(t *testing.T) {
+	d := testDaemon(t)
+	for _, addr := range []string{"198.18.0.1", "198.18.1.1"} {
+		d.pool.ips[addr] = sinActive(addr, 300)
+	}
+	d.relayStat("198.18.0.1").EMAms = 100 // TCP dial time from real relay traffic
+	d.updateRelaySnap()
+	ts := d.relaySnap.Load().([]relayTarget)
+	if len(ts) != 2 || ts[0].Weight != ts[1].Weight {
+		t.Fatalf("equal probe medians must give equal weights, got %+v", ts)
+	}
+}
+
+// TestRelayFeedbackReachesPromotedActive: a relay dial result must carry the
+// generation of the active it dialed; a real active has a nonzero generation,
+// so a zero would drop every real connection as stale.
+func TestRelayFeedbackReachesPromotedActive(t *testing.T) {
+	up, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer up.Close()
+	go func() {
+		for {
+			c, err := up.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+	_, port, _ := net.SplitHostPort(up.Addr().String())
+	d := testDaemon(t)
+	fmt.Sscanf(port, "%d", &d.cfg.RelayPort)
+	ip := &IP{Addr: "127.0.0.1", Role: RoleStandby, Colo: "NRT"}
+	d.pool.ips[ip.Addr] = ip
+	d.pool.promoteActive(ip, 100, t0)
+	d.updateRelaySnap()
+	cli, srv := net.Pipe()
+	defer cli.Close()
+	go d.handleRelayConn(srv)
+	select {
+	case r := <-d.results:
+		d.apply(r)
+	case <-time.After(2 * time.Second):
+		t.Fatal("relay dial result not reported")
+	}
+	if st := d.relayStat(ip.Addr); st.Total != 1 || st.EMAms <= 0 {
+		t.Fatalf("relay feedback must reach a promoted active, got total=%d ema=%.1f", st.Total, st.EMAms)
+	}
+}

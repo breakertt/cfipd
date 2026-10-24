@@ -180,10 +180,10 @@ func (d *daemon) handleCtl(req ctlRequest) {
 			rep.err = "only a standby can be promoted"
 		} else if len(d.pool.actives()) >= d.cfg.ActiveCount {
 			rep.err = "actives full; elective replacement goes through PK, not manual promote"
-		} else if !d.pool.diverseWith(ip, d.pool.actives()) {
+		} else if !d.pool.diverseWith(ip, d.pool.actives(), false) {
 			rep.err = "promotion would violate prefix/colo diversity"
 		} else {
-			d.startPromotion(ip)
+			d.startPromotion(ip, job{})
 			rep.v = map[string]string{"msg": "promotion test started for " + ip.Addr}
 		}
 	case "/quarantine":
