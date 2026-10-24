@@ -65,7 +65,7 @@ type ipView struct {
 	Median  float64 `json:"median_ms,omitempty"` // HTTP probe duration, not pure RTT
 	Jitter  float64 `json:"jitter_ms,omitempty"`
 	Samples int     `json:"samples"`
-	Fail    float64 `json:"fail_rate,omitempty"` // probe failure rate; absent when unsampled
+	Fail    float64 `json:"fail_rate,omitempty"` // probe failure rate; omitted when zero or unsampled
 	WinAge  string  `json:"win_age,omitempty"`   // age of oldest retained sample
 	Speed   float64 `json:"speed_mbps,omitempty"`
 	SpeedAt string  `json:"speed_at,omitempty"` // unknown for pre-v2 values

@@ -5,65 +5,120 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>cfipd</title>
 <style>
-  :root { --bg:#0f1419; --card:#1a2129; --border:#2a333d; --fg:#d7dde3; --dim:#8a97a3;
-          --ok:#3fb96c; --warn:#e0a03c; --bad:#e05c5c; --accent:#4d9de0; }
-  * { box-sizing:border-box; margin:0; }
-  body { background:var(--bg); color:var(--fg); font:14px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; padding:16px; max-width:1100px; margin:0 auto; }
-  h1 { font-size:18px; }
-  h2 { font-size:15px; color:var(--dim); margin:20px 0 8px; font-weight:600; }
-  .mono { font-family:ui-monospace,Menlo,Consolas,monospace; word-break:break-all; }
-  header { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
-  header .sp { flex:1; }
-  button { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:6px 14px; font-size:13px; cursor:pointer; }
-  button:disabled { opacity:.5; cursor:default; }
-  #badge { font-size:12px; padding:3px 10px; border-radius:10px; background:var(--card); border:1px solid var(--border); }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  :root { color-scheme:light dark;
+    --bg:#eef1ef; --panel:#fbfcfb; --ink:#131a17; --muted:#5d6b64; --line:#dbe2dd; --soft:#f1f4f2;
+    --ok:#15803d; --warn:#b45309; --bad:#dc2626; --accent:#0d7d72;
+    --mono:ui-monospace,'SF Mono',SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei','Noto Sans',Helvetica,Arial,sans-serif; }
+  @media (prefers-color-scheme:dark) { :root {
+    --bg:#0b120f; --panel:#101815; --ink:#dfe8e3; --muted:#8ba097; --line:#22302a; --soft:#141e1a;
+    --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; --accent:#4fd0c2; } }
+  body { font:14px/1.45 var(--sans); background:var(--bg); color:var(--ink); padding:1.2rem 1rem 3rem; }
+  main { max-width:1100px; margin:0 auto; }
+  .mono { font-family:var(--mono); }
+  .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); }
+  .dot { display:inline-block; width:.55rem; height:.55rem; border-radius:50%; background:currentColor; flex:none; }
+
+  header { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem 1.1rem; }
+  h1 { font:600 1.2rem var(--mono); letter-spacing:.02em; }
+  #badge { display:inline-flex; align-items:center; gap:.45em; font-size:.85rem; color:var(--muted); }
   #badge.ok { color:var(--ok); } #badge.warn { color:var(--warn); } #badge.bad { color:var(--bad); }
-  #updated { font-size:12px; color:var(--dim); }
-  #err { display:none; background:#3a2222; border:1px solid var(--bad); color:#f0b0b0; border-radius:6px; padding:8px 12px; margin-top:12px; font-size:13px; word-break:break-all; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:10px; margin-top:14px; }
-  .stat { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:10px 14px; }
-  .stat .k { font-size:12px; color:var(--dim); }
-  .stat .v { font-size:20px; font-weight:600; margin-top:2px; }
-  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr)); gap:10px; }
-  .ipcard { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:12px 14px; }
-  .ipcard .head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
-  .ipcard .addr { font-size:15px; font-weight:600; }
-  .tag { font-size:11px; padding:1px 7px; border-radius:8px; border:1px solid var(--border); color:var(--dim); }
-  .tag.healthy { color:var(--ok); border-color:var(--ok); }
-  .tag.degraded { color:var(--warn); border-color:var(--warn); }
-  table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--border); border-radius:8px; overflow:hidden; display:block; overflow-x:auto; }
-  th, td { text-align:left; padding:7px 12px; white-space:nowrap; border-bottom:1px solid var(--border); }
-  th { color:var(--dim); font-size:12px; font-weight:600; }
-  tr:last-child td { border-bottom:0; }
-  .kv { display:grid; grid-template-columns:auto 1fr; gap:2px 12px; font-size:13px; }
-  .kv .k { color:var(--dim); white-space:nowrap; }
-  .empty { color:var(--dim); padding:14px; background:var(--card); border:1px solid var(--border); border-radius:8px; }
-  .note { font-size:12px; color:var(--dim); margin-top:4px; }
+  nav { display:flex; align-items:center; gap:.4rem; margin-left:auto; }
+  #updated { font:.72rem var(--mono); color:var(--muted); margin-right:.3rem; }
+  nav button { font:.76rem var(--mono); color:var(--muted); background:var(--panel); border:1px solid var(--line);
+    border-radius:99px; padding:.3em .95em; cursor:pointer; }
+  nav button:hover { color:var(--ink); border-color:var(--muted); }
+  nav button:disabled { opacity:.5; cursor:default; }
+  #err { display:none; margin-top:.8rem; border:1px solid var(--bad); color:var(--bad); border-radius:8px;
+    padding:.5rem .8rem; font:.76rem var(--mono); overflow-wrap:anywhere; }
+
+  h2 { display:flex; align-items:baseline; gap:.6rem; margin:1.6rem 0 .6rem;
+    font:600 .7rem var(--mono); letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
+  h2 small { font:400 .72rem var(--sans); letter-spacing:0; text-transform:none; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; }
+  .empty { color:var(--muted); padding:1rem; border:1px dashed var(--line); border-radius:12px; font-size:.85rem; }
+
+  .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,330px),1fr)); gap:.7rem; }
+  .ip { padding:.85rem 1rem .75rem; }
+  .ch { display:flex; align-items:center; gap:.55rem; }
+  .addr { font:600 .88rem var(--mono); overflow-wrap:break-word; min-width:0; }
+  .tags { display:flex; gap:.3rem; margin-left:auto; flex:none; }
+  .tag { font:.66rem var(--mono); color:var(--muted); border:1px solid var(--line); border-radius:4px; padding:.05em .4em; }
+  .tag.warn { color:var(--warn); border-color:var(--warn); }
+  .big { display:flex; justify-content:space-between; gap:.8rem; margin:.9rem 0 .8rem; }
+  .big .v { font-size:1.65rem; font-weight:600; line-height:1.1; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .big .v small { font-size:.72rem; font-weight:500; color:var(--muted); margin-left:.2em; }
+  .big .k { font-size:.7rem; color:var(--muted); margin-top:.25rem; white-space:nowrap; }
+  .meta { display:grid; grid-template-columns:auto 1fr auto 1fr; gap:.3rem .7rem; padding-top:.65rem; border-top:1px solid var(--line);
+    font:.74rem var(--mono); }
+  .meta .k { color:var(--muted); white-space:nowrap; }
+  .meta .v { white-space:nowrap; }
+
+  .sel { display:grid; grid-template-columns:auto 1fr; gap:.55rem 1rem; padding:.8rem 1rem; align-items:baseline; }
+  .sel .k { font:600 .62rem var(--mono); letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
+  .sel .v { min-width:0; display:flex; flex-wrap:wrap; align-items:baseline; gap:.3rem .7rem; }
+  .pill { font:.72rem var(--mono); color:var(--muted); border:1px solid currentColor; border-radius:99px; padding:0 .65em; white-space:nowrap; }
+  .pill.ok { color:var(--ok); } .pill.warn { color:var(--warn); }
+  .last { font:.74rem var(--mono); color:var(--muted); overflow-wrap:anywhere; }
+
+  .tw { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+  th, td { padding:.55rem .85rem; white-space:nowrap; text-align:right; border-bottom:1px solid var(--line); }
+  th.l, td.l { text-align:left; }
+  th { font:600 .62rem var(--mono); letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
+  tbody tr:last-child td { border-bottom:0; }
+  tbody tr:hover { background:var(--soft); }
+  td.rank, td.dim { color:var(--muted); }
+  td .addr { font-weight:500; margin-right:.4rem; }
+  .delta { font-size:.75rem; margin-left:.35rem; }
+  @media (max-width:640px) { th, td { padding:.5rem .55rem; } .opt { display:none; } }
+
+  .ov { padding:1rem 1.1rem .95rem; }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(112px,1fr)); gap:1rem 1.2rem; }
+  .kpi .k { font:600 .6rem var(--mono); letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
+  .kpi .v { font-size:1.35rem; font-weight:600; line-height:1.2; margin-top:.3rem; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .kpi .v small { font-size:.7rem; font-weight:500; color:var(--muted); margin-left:.2em; }
+  .kpi .s { font:.68rem var(--mono); color:var(--muted); margin-top:.1rem; white-space:nowrap; }
+  .probes { margin-top:1rem; padding-top:.85rem; border-top:1px solid var(--line); }
+  .probes .head { display:flex; align-items:baseline; gap:.6rem; margin-bottom:.5rem; }
+  .probes .head .k { font:600 .6rem var(--mono); letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
+  .probes .head b { font-size:.95rem; font-variant-numeric:tabular-nums; }
+  .stack { display:flex; gap:2px; height:.45rem; border-radius:99px; overflow:hidden; background:var(--soft); }
+  .stack span { background:var(--accent); min-width:2px; }
+  .legend { display:flex; flex-wrap:wrap; gap:.3rem 1.1rem; margin-top:.6rem; font:.72rem var(--mono); color:var(--muted); }
+  .legend i { display:inline-block; width:.55rem; height:.55rem; border-radius:2px; background:var(--accent); margin-right:.4em; }
+  .legend b { color:var(--ink); font-weight:500; margin-left:.35em; font-variant-numeric:tabular-nums; }
+  .note { margin-top:.6rem; font-size:.72rem; line-height:1.6; color:var(--muted); }
 </style>
 </head>
 <body>
+<main>
 <header>
-  <h1 data-i18n="title">cfipd dashboard</h1>
+  <h1>cfipd</h1>
   <span id="badge"></span>
-  <span class="sp"></span>
-  <span id="updated"></span>
-  <button id="lang" title="Language / 语言">中文</button>
-  <button id="refresh" data-i18n="refresh">Refresh</button>
+  <nav>
+    <span id="updated"></span>
+    <button id="lang" title="Language / 语言">中文</button>
+    <button id="refresh" data-i18n="refresh">Refresh</button>
+  </nav>
 </header>
 <div id="err"></div>
 
-<h2 data-i18n="h_overview">Overview</h2>
-<div class="grid" id="overview"></div>
+<h2><span data-i18n="h_overview">Overview</span></h2>
+<div class="card ov" id="overview"></div>
 
-<h2 data-i18n="h_active">Active (current entry points)</h2>
+<h2><span data-i18n="h_active">Active</span><small data-i18n="sub_active"></small></h2>
 <div class="cards" id="actives"></div>
-<p class="note" data-i18n="note_active">Probe time is the total duration of an HTTPS trace request, not a pure TCP RTT. ¹ Speed is a one-time result from promotion/PK, not live bandwidth; timestamps of data from before v2 are unknown.</p>
 
-<h2 data-i18n="h_standby">Standby (ranked)</h2>
+<h2><span data-i18n="h_select">Selection</span></h2>
+<div class="card sel" id="select"></div>
+
+<h2><span data-i18n="h_standby">Standby</span><small data-i18n="sub_standby"></small></h2>
 <div id="standbys"></div>
 
-<h2 data-i18n="h_relay">Relay traffic</h2>
-<div id="relay"></div>
+<p class="note" data-i18n="note"></p>
+</main>
 
 <script>
 const POLL_MS = 10000, STALE_MS = 30000;
@@ -73,33 +128,41 @@ let lastOK = 0, inflight = false, failed = false, timer = null, lastData = null,
 const I18N = {
   en: {
     title: 'cfipd dashboard', refresh: 'Refresh',
-    h_overview: 'Overview', h_active: 'Active (current entry points)', h_standby: 'Standby (ranked)', h_relay: 'Relay traffic',
-    note_active: 'Probe time is the total duration of an HTTPS trace request, not a pure TCP RTT. ¹ Speed is a one-time result from promotion/PK, not live bandwidth; timestamps of data from before v2 are unknown.',
-    st_stale: 'Stale data', st_lost: 'Connection lost', st_nocon: 'Cannot connect', st_loading: 'Loading…', st_ok: 'Connected',
-    updated: 'Updated ', req_failed: 'Request failed: ', showing_last: ' (showing last successful data)',
-    pk_comparing: 'comparing', pk_observing: 'observing until ', pk_pending: 'pending ', pk_ready: 'ready',
-    k_uptime: 'Uptime', k_scan: 'Scan interval', k_active: 'Active', k_standby: 'Standby', k_candidate: 'Candidate',
-    k_probes: 'Probes today', k_promo: 'Promotion test', k_pk: 'PK', running: 'running', idle: 'idle',
-    k_median: 'Median probe time', k_jitter: 'Jitter (p90−median)', k_fail: 'Probe failure rate', samples_n: n => ` (${n} samples)`,
-    k_speed: 'Historical speed¹', unknown_time: 'unknown time', k_interval: 'Probe interval', k_next: 'Next check',
-    no_active: 'No active IPs', no_standby: 'No standby IPs', no_relay: 'No relay traffic yet',
-    th_type: 'Type', th_colo: 'Colo', th_probe: 'Probe time', th_jitter: 'Jitter', th_fail: 'Fail %', th_samples: 'Samples', th_next: 'Next check',
-    th_total: 'Total conns', th_fails: 'Failures', th_ema: 'Connect EMA', th_up: 'Up', th_down: 'Down', th_open: 'Open conns',
+    h_overview: 'Overview', h_active: 'Active', sub_active: 'entry points that serve relay traffic now',
+    h_select: 'Selection', h_standby: 'Standby', sub_standby: 'ranked, best first · green: ms faster than the slowest active',
+    st_loading: 'Loading…', st_nocon: 'Cannot reach cfipd', st_lost: 'Connection lost', st_stale: 'Data is stale',
+    st_none: 'No active IP', st_serving: n => `${n} active ${n === 1 ? 'IP' : 'IPs'} serving`, st_degraded: n => ` · ${n} degraded`,
+    updated: s => `updated ${s}s ago`, req_failed: 'Request failed: ', showing_last: ' (showing the last good data)',
+    k_median: 'probe time', k_jitter: 'jitter', k_speed: 'bandwidth¹', ago: (n, u) => `${n}${u} ago`, unknown_time: 'time unknown',
+    m_conns: 'conns', m_connect: 'connect', m_up: '↑ up', m_down: '↓ down', m_fail: 'fail', m_next: 'next probe',
+    open: n => `${n} open`, failed: n => `${n} failed`, of_samples: (p, n) => `${p} of ${n}`,
+    s_promo: 'Promotion', s_pk: 'PK', running: 'testing', idle: 'idle',
+    pk_comparing: 'comparing', pk_observing: s => `observing until ${s}`, pk_pending: s => `confirming ${s}`, pk_ready: 'ready',
+    pk_last: 'last: ', pk_none: 'no PK result yet',
+    th_ip: 'IP', th_probe: 'Probe time', th_jitter: 'Jitter', th_fail: 'Fail', th_samples: 'Samples', th_next: 'Next check',
+    no_active: 'No active IP. cfipd promotes a standby when one passes the promotion test.', no_standby: 'No standby IP',
+    k_active: 'Active', k_standby: 'Standby', k_cand: 'Candidates', k_relay: 'Relay', k_uptime: 'Uptime',
+    k_scan: 'Scan every', k_mem: 'Memory', k_tests: 'Tests today', k_probes: 'Probes today', conns: 'conns', degraded_n: n => `${n} degraded`,
+    note: 'Probe time is the median duration of an HTTPS trace request, not a pure TCP RTT. Jitter is p90 minus median. ¹ Bandwidth is the latest single-connection download test (promotion, PK, or recheck), not live throughput.',
   },
   zh: {
     title: 'cfipd 仪表盘', refresh: '刷新',
-    h_overview: '概览', h_active: 'Active（当前入口）', h_standby: 'Standby（按优先级排名）', h_relay: 'Relay 流量统计',
-    note_active: '探测耗时为 HTTPS trace 请求总耗时，非纯 TCP RTT。¹ 测速为转正/PK 时的一次性结果，非实时带宽；v2 之前的数据时间未知。',
-    st_stale: '数据过期', st_lost: '连接中断', st_nocon: '无法连接', st_loading: '加载中…', st_ok: '已连接',
-    updated: '更新于 ', req_failed: '请求失败：', showing_last: '（显示的是上次成功的数据）',
-    pk_comparing: '对比中', pk_observing: '观察期至 ', pk_pending: '待确认 ', pk_ready: '就绪',
-    k_uptime: '运行时长', k_scan: '扫描间隔', k_active: 'Active', k_standby: 'Standby', k_candidate: 'Candidate',
-    k_probes: '今日探测', k_promo: '转正测试', k_pk: 'PK', running: '进行中', idle: '空闲',
-    k_median: '中位探测耗时', k_jitter: '抖动 (p90−中位)', k_fail: '探测失败率', samples_n: n => `（${n} 样本）`,
-    k_speed: '历史测速¹', unknown_time: '未知时间', k_interval: '探测间隔', k_next: '下次检查',
-    no_active: '当前没有 Active IP', no_standby: '当前没有 Standby IP', no_relay: '暂无 relay 流量',
-    th_type: '类型', th_colo: 'Colo', th_probe: '探测耗时', th_jitter: '抖动', th_fail: '失败率', th_samples: '样本', th_next: '下次检查',
-    th_total: '连接总数', th_fails: '失败次数', th_ema: '建连 EMA', th_up: '上行', th_down: '下行', th_open: '当前连接',
+    h_overview: '概览', h_active: 'Active', sub_active: '当前承载 relay 流量的入口',
+    h_select: '选择', h_standby: 'Standby', sub_standby: '按优先级排名 · 绿色数字：比最慢的 Active 快多少 ms',
+    st_loading: '加载中…', st_nocon: '无法连接 cfipd', st_lost: '连接中断', st_stale: '数据过期',
+    st_none: '没有 Active IP', st_serving: n => `${n} 个 Active 在转发`, st_degraded: n => ` · ${n} 个降级`,
+    updated: s => `${s} 秒前更新`, req_failed: '请求失败：', showing_last: '（显示的是上次成功的数据）',
+    k_median: '探测耗时', k_jitter: '抖动', k_speed: '带宽¹', ago: (n, u) => `${n} ${{ m: '分钟', h: '小时', d: '天' }[u]}前`, unknown_time: '时间未知',
+    m_conns: '连接', m_connect: '建连', m_up: '↑ 上行', m_down: '↓ 下行', m_fail: '失败率', m_next: '下次探测',
+    open: n => `当前 ${n}`, failed: n => `失败 ${n}`, of_samples: (p, n) => `${p}（${n} 次）`,
+    s_promo: '转正测试', s_pk: 'PK', running: '进行中', idle: '空闲',
+    pk_comparing: '对比中', pk_observing: s => `观察期至 ${s}`, pk_pending: s => `待确认 ${s}`, pk_ready: '就绪',
+    pk_last: '上次：', pk_none: '还没有 PK 结果',
+    th_ip: 'IP', th_probe: '探测耗时', th_jitter: '抖动', th_fail: '失败率', th_samples: '样本', th_next: '下次检查',
+    no_active: '当前没有 Active IP。有后备通过转正测试后，cfipd 会自动补上。', no_standby: '当前没有 Standby IP',
+    k_active: 'Active', k_standby: 'Standby', k_cand: '候选', k_relay: 'Relay', k_uptime: '运行时长',
+    k_scan: '扫描间隔', k_mem: '内存', k_tests: '今日测速', k_probes: '今日探测', conns: '连接', degraded_n: n => `${n} 个降级`,
+    note: '探测耗时为 HTTPS trace 请求耗时的中位数，不是纯 TCP RTT；抖动为 p90 减中位数。¹ 带宽是最近一次单连接下载测试的结果（转正、PK 或复测），不是实时吞吐。',
   },
 };
 const STATE_ZH = { healthy: '健康', degraded: '降级' };
@@ -112,69 +175,111 @@ const stateText = s => (lang === 'zh' && STATE_ZH[s]) || s;
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const ms = v => v ? v.toFixed(0) + ' ms' : '—';
-const failPct = v => v.samples > 0 ? (v.fail_rate * 100).toFixed(0) + '%' : '—';
+const n0 = v => v ? Math.round(v).toLocaleString('en-US') : '—';
+const ms = v => v ? Math.round(v) + ' ms' : '—';
+// fail_rate is omitted from the JSON when it is zero.
+const failPct = v => v.samples > 0 ? ((v.fail_rate || 0) * 100).toFixed(0) + '%' : '—';
 const fam = a => a.includes(':') ? 'IPv6' : 'IPv4';
+// Go durations: "4m0s" -> "4m", "1h16m53s" -> "1h16m".
+const dur = s => s ? esc(String(s).replace(/(h\d+m)[\d.]+s$/, '$1').replace(/([hm])0s$/, '$1').replace(/h0m$/, 'h')) : '—';
 function bytes(n) {
-  if (!n) return '0';
+  if (!n) return '0 B';
   const u = ['B','KB','MB','GB','TB']; let i = 0;
   while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
   return n.toFixed(i ? 1 : 0) + ' ' + u[i];
 }
+function ago(iso) {
+  const s = (Date.now() - Date.parse(iso)) / 1000;
+  if (!(s >= 0)) return t('unknown_time');
+  const [n, u] = s < 3600 ? [Math.max(1, Math.round(s / 60)), 'm'] : s < 172800 ? [Math.round(s / 3600), 'h'] : [Math.round(s / 86400), 'd'];
+  return t('ago')(n, u);
+}
+const vu = (v, u) => `${v}<small>${u}</small>`;
+const bytesVU = n => vu(...bytes(n).split(' '));
+
 function setBadge() {
-  const b = $('badge'), age = Date.now() - lastOK;
-  if (lastOK && age > STALE_MS) { b.textContent = t('st_stale'); b.className = 'warn'; }
-  else if (failed) { b.textContent = lastOK ? t('st_lost') : t('st_nocon'); b.className = 'bad'; }
-  else if (!lastOK) { b.textContent = t('st_loading'); b.className = ''; }
-  else { b.textContent = t('st_ok'); b.className = 'ok'; }
+  const el = $('badge'), age = Date.now() - lastOK, act = lastData ? lastData[0].actives : [];
+  const degraded = act.filter(a => a.state !== 'healthy').length;
+  let cls = '', text = t('st_loading');
+  if (lastOK && age > STALE_MS) [cls, text] = ['warn', t('st_stale')];
+  else if (failed) [cls, text] = ['bad', lastOK ? t('st_lost') : t('st_nocon')];
+  else if (lastOK && !act.length) [cls, text] = ['bad', t('st_none')];
+  else if (lastOK) [cls, text] = [degraded ? 'warn' : 'ok', t('st_serving')(act.length) + (degraded ? t('st_degraded')(degraded) : '')];
+  el.className = cls;
+  el.innerHTML = `<span class="dot"></span>${esc(text)}`;
 }
 
 function render(status, standbys, relay) {
+  const relayBy = Object.fromEntries(relay.map(r => [r.addr, r]));
+  const degraded = status.actives.filter(a => a.state !== 'healthy').length;
+  const rt = relay.reduce((s, r) => ({ n: s.n + r.total, up: s.up + r.bytes_up, down: s.down + r.bytes_down }), { n: 0, up: 0, down: 0 });
+  const mem = status.memory_mb;
+  const probes = Object.entries(status.probes_today || {}).sort((x, y) => y[1] - x[1]);
+  const total = probes.reduce((s, [, v]) => s + v, 0);
+  const shade = i => (1 - i * 0.7 / Math.max(1, probes.length - 1)).toFixed(2);
+  $('overview').innerHTML = `<div class="kpis">${[
+    ['k_active', status.actives.length, degraded ? `<span class="warn">${t('degraded_n')(degraded)}</span>` : ''],
+    ['k_standby', status.standbys], ['k_cand', status.candidates],
+    ['k_relay', vu(rt.n, t('conns')), `↑ ${bytes(rt.up)}  ↓ ${bytes(rt.down)}`],
+    ['k_uptime', dur(status.uptime)], ['k_scan', dur(status.scan_every)],
+    ['k_mem', mem ? vu(mem.go_in_use, '/ ' + mem.limit + ' MB') : '—'], ['k_tests', bytesVU(status.bytes_today)],
+  ].map(([k, v, sub]) => `<div class="kpi"><div class="k">${t(k)}</div><div class="v">${v}</div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`).join('')}</div>
+  <div class="probes">
+    <div class="head"><span class="k">${t('k_probes')}</span><b>${total.toLocaleString('en-US')}</b></div>
+    <div class="stack">${probes.map(([k, v], i) => `<span style="flex:${v};opacity:${shade(i)}" title="${esc(k)} ${v}"></span>`).join('')}</div>
+    <div class="legend">${probes.map(([k, v], i) => `<span><i style="opacity:${shade(i)}"></i>${esc(k)}<b>${v.toLocaleString('en-US')}</b></span>`).join('')}</div>
+  </div>`;
+
+  $('actives').innerHTML = status.actives.length ? status.actives.map(a => {
+    const r = relayBy[a.addr], bad = a.state !== 'healthy';
+    return `<div class="card ip">
+      <div class="ch">
+        <span class="dot ${bad ? 'warn' : 'ok'}" title="${esc(stateText(a.state))}"></span>
+        <span class="addr">${esc(a.addr).replace(/:/g, ':<wbr>')}</span>
+        <span class="tags">${bad ? `<span class="tag warn">${esc(stateText(a.state))}</span>` : ''}<span class="tag">${esc(a.colo || '?')}</span><span class="tag">${fam(a.addr)}</span></span>
+      </div>
+      <div class="big">
+        <div><div class="v">${n0(a.median_ms)}<small>ms</small></div><div class="k">${t('k_median')}</div></div>
+        <div><div class="v">±${n0(a.jitter_ms)}<small>ms</small></div><div class="k">${t('k_jitter')}</div></div>
+        <div><div class="v">${a.speed_mbps ? n0(a.speed_mbps) + '<small>Mbps</small>' : '—'}</div>
+          <div class="k">${t('k_speed')}${a.speed_mbps ? ' · ' + (a.speed_at ? ago(a.speed_at) : t('unknown_time')) : ''}</div></div>
+      </div>
+      <div class="meta">${[
+        ['m_conns', `${r?.total || 0} · ${t('open')(r?.conns || 0)}${r?.fails ? ` · <span class="bad">${t('failed')(r.fails)}</span>` : ''}`],
+        ['m_connect', ms(r?.connect_ema_ms)], ['m_up', bytes(r?.bytes_up)], ['m_down', bytes(r?.bytes_down)],
+        ['m_fail', t('of_samples')(failPct(a), a.samples || 0)], ['m_next', dur(a.next_in)],
+      ].map(([k, v]) => `<span class="k">${t(k)}</span><span class="v">${v}</span>`).join('')}</div>
+    </div>`;
+  }).join('') : `<div class="empty">${t('no_active')}</div>`;
+
   const pk = status.pk || {};
-  const probesToday = Object.entries(status.probes_today || {}).map(([k,v]) => `${k}:${v}`).join(' ') || '0';
-  const pkText = pk.running ? t('pk_comparing') : pk.observe_until ? t('pk_observing') + pk.observe_until.slice(0,16).replace('T',' ')
-    : pk.pending ? t('pk_pending') + pk.pending : (pk.last || t('pk_ready'));
-  $('overview').innerHTML = [
-    ['k_uptime', status.uptime], ['k_scan', status.scan_every],
-    ['k_active', status.actives.length], ['k_standby', status.standbys],
-    ['k_candidate', status.candidates], ['k_probes', probesToday],
-    ['k_promo', status.promoting ? t('running') : t('idle')], ['k_pk', pkText],
-  ].map(([k,v]) => `<div class="stat"><div class="k">${t(k)}</div><div class="v">${esc(v)}</div></div>`).join('');
+  const pkState = pk.running ? ['ok', t('pk_comparing')]
+    : pk.observe_until ? ['warn', t('pk_observing')(pk.observe_until.slice(5, 16).replace('T', ' '))]
+    : pk.pending ? ['warn', t('pk_pending')(pk.pending)] : ['', t('pk_ready')];
+  $('select').innerHTML = `
+    <span class="k">${t('s_promo')}</span>
+    <span class="v"><span class="pill ${status.promoting ? 'ok' : ''}">${status.promoting ? t('running') : t('idle')}</span></span>
+    <span class="k">${t('s_pk')}</span>
+    <span class="v"><span class="pill ${pkState[0]}">${esc(pkState[1])}</span>
+      <span class="last">${pk.last ? t('pk_last') + esc(pk.last) : t('pk_none')}</span></span>`;
 
-  $('actives').innerHTML = status.actives.length ? status.actives.map(a => `
-    <div class="ipcard">
-      <div class="head">
-        <span class="addr mono">${esc(a.addr)}</span>
-        <span class="tag">${fam(a.addr)}</span>
-        <span class="tag">${esc(a.colo || '?')}</span>
-        <span class="tag ${esc(a.state)}">${esc(stateText(a.state))}</span>
-      </div>
-      <div class="kv">
-        <span class="k">${t('k_median')}</span><span>${ms(a.median_ms)}</span>
-        <span class="k">${t('k_jitter')}</span><span>${ms(a.jitter_ms)}</span>
-        <span class="k">${t('k_fail')}</span><span>${failPct(a)}${t('samples_n')(a.samples || 0)}</span>
-        <span class="k">${t('k_speed')}</span><span>${a.speed_mbps ? a.speed_mbps.toFixed(1) + ' Mbps @ ' + esc(a.speed_at || t('unknown_time')) : '—'}</span>
-        <span class="k">${t('k_interval')}</span><span>${esc(a.probe_every || '—')}</span>
-        <span class="k">${t('k_next')}</span><span>${esc(a.next_in || '—')}</span>
-      </div>
-    </div>`).join('')
-    : `<div class="empty">${t('no_active')}</div>`;
+  const slowest = Math.max(0, ...status.actives.map(a => a.median_ms || 0));
+  const faster = s => {
+    const d = Math.round(slowest - (s.median_ms || Infinity));
+    return d > 0 ? `<span class="delta ok">−${d}</span>` : '';
+  };
+  $('standbys').innerHTML = standbys.length ? `<div class="card tw"><table>
+    <thead><tr><th class="opt">#</th><th class="l">${t('th_ip')}</th><th>${t('th_probe')}</th><th class="opt">${t('th_jitter')}</th>
+      <th>${t('th_fail')}</th><th class="opt">${t('th_samples')}</th><th class="opt">${t('th_next')}</th></tr></thead>
+    <tbody>${standbys.map((s, i) => `<tr><td class="rank opt">${i + 1}</td>
+      <td class="l"><span class="mono addr">${esc(s.addr)}</span><span class="tag">${esc(s.colo || '?')}</span></td>
+      <td>${ms(s.median_ms)}${faster(s)}</td><td class="opt">±${ms(s.jitter_ms)}</td><td>${failPct(s)}</td>
+      <td class="opt">${s.samples || 0}</td><td class="dim opt">${dur(s.next_in)}</td></tr>`).join('')}</tbody>
+    </table></div>` : `<div class="empty">${t('no_standby')}</div>`;
 
-  $('standbys').innerHTML = standbys.length ? `<table>
-    <tr><th>#</th><th>IP</th><th>${t('th_type')}</th><th>${t('th_colo')}</th><th>${t('th_probe')}</th><th>${t('th_jitter')}</th><th>${t('th_fail')}</th><th>${t('th_samples')}</th><th>${t('th_next')}</th></tr>
-    ${standbys.map((s,i) => `<tr><td>${i+1}</td><td class="mono">${esc(s.addr)}</td><td>${fam(s.addr)}</td>
-      <td>${esc(s.colo || '?')}</td><td>${ms(s.median_ms)}</td><td>${ms(s.jitter_ms)}</td>
-      <td>${failPct(s)}</td><td>${s.samples || 0}</td><td>${esc(s.next_in || '—')}</td></tr>`).join('')}
-    </table>` : `<div class="empty">${t('no_standby')}</div>`;
-
-  $('relay').innerHTML = relay.length ? `<table>
-    <tr><th>IP</th><th>${t('th_total')}</th><th>${t('th_fails')}</th><th>${t('th_ema')}</th><th>${t('th_up')}</th><th>${t('th_down')}</th><th>${t('th_open')}</th></tr>
-    ${relay.map(r => `<tr><td class="mono">${esc(r.addr)}</td><td>${r.total}</td><td>${r.fails}</td>
-      <td>${ms(r.connect_ema_ms)}</td><td>${bytes(r.bytes_up)}</td><td>${bytes(r.bytes_down)}</td><td>${r.conns}</td></tr>`).join('')}
-    </table>` : `<div class="empty">${t('no_relay')}</div>`;
 }
 
-function showUpdated() { $('updated').textContent = lastOK ? t('updated') + new Date(lastOK).toLocaleTimeString() : ''; }
+function showUpdated() { $('updated').textContent = lastOK ? t('updated')(Math.round((Date.now() - lastOK) / 1000)) : ''; }
 function showErr() {
   const el = $('err');
   if (!lastErr) { el.style.display = 'none'; return; }
@@ -202,7 +307,7 @@ async function poll() {
         if (!r.ok) throw new Error(u + ': HTTP ' + r.status + ' ' + (await r.text()).trim());
         return r.json();
       }));
-    lastData = [status, standbys, relay || []];
+    lastData = [status, standbys || [], relay || []];
     render(...lastData);
     lastOK = Date.now();
     failed = false;
@@ -225,7 +330,7 @@ $('lang').onclick = () => {
   try { localStorage.setItem('cfipd.lang', lang); } catch (e) {}
   applyLang();
 };
-setInterval(setBadge, 5000);
+setInterval(() => { setBadge(); showUpdated(); }, 1000);
 applyLang();
 poll();
 </script>
