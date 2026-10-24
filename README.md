@@ -165,7 +165,9 @@ the daemon through its Unix socket.
 
 The dashboard can also be started directly with `cfipd web`. It listens on
 `127.0.0.1:8080` by default; `-listen` changes the bind address. Its read-only APIs
-are `/api/status`, `/api/standbys`, and `/api/relay`.
+are `/api/status`, `/api/standbys`, and `/api/relay`. The page requests them with
+relative paths, so a reverse proxy can mount the dashboard under a subpath such as
+`/cfipd/`. The proxy must strip the prefix, and the page URL must end with `/`.
 
 ## How it works
 

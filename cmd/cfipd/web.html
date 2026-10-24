@@ -197,7 +197,7 @@ async function poll() {
   $('refresh').disabled = true;
   try {
     const [status, standbys, relay] = await Promise.all(
-      ['/api/status', '/api/standbys', '/api/relay'].map(async u => {
+      ['api/status', 'api/standbys', 'api/relay'].map(async u => {
         const r = await fetch(u);
         if (!r.ok) throw new Error(u + ': HTTP ' + r.status + ' ' + (await r.text()).trim());
         return r.json();

@@ -149,7 +149,8 @@ systemd 的目录设置和权限。
 | `cfipd version` | 查看版本、源码提交和构建时间 |
 
 也可直接执行 `cfipd web` 启动面板，默认监听 `127.0.0.1:8080`，用 `-listen` 调整地址。
-只读 API 为 `/api/status`、`/api/standbys` 和 `/api/relay`。
+只读 API 为 `/api/status`、`/api/standbys` 和 `/api/relay`。页面用相对路径请求它们，
+反向代理可以把面板挂在 `/cfipd/` 这类子路径下：转发时要去掉前缀，页面地址要以 `/` 结尾。
 
 ## 工作机制
 
