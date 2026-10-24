@@ -330,7 +330,9 @@ func TestRelayCountsClients(t *testing.T) {
 	if _, err := io.ReadFull(cli, make([]byte, 5)); err != nil {
 		t.Fatal(err)
 	}
-	c := waitClient(t, d, func(c clientView) bool { return c.BytesDown == 5 })
+	// The up counter is added after the write returns, so the echo can be
+	// counted first: wait for both.
+	c := waitClient(t, d, func(c clientView) bool { return c.BytesUp == 5 && c.BytesDown == 5 })
 	if c.Addr != "127.0.0.1" || c.Total != 1 || c.Open != 1 || c.BytesUp != 5 || c.Fails != 0 || c.Last == "" {
 		t.Fatalf("open connection: %+v", c)
 	}
@@ -377,5 +379,77 @@ func TestClientLastSeenAtClose(t *testing.T) {
 	ct.done(ct.open("192.0.2.1", t0), false, t0.Add(3*time.Hour))
 	if c := ct.list()[0]; c.Last != t0.Add(3*time.Hour).Format(time.RFC3339) {
 		t.Fatalf("last seen %s, want the close time", c.Last)
+	}
+}
+
+// Each relay connection is listed while open, with its client address,
+// upstream active, and bytes, and stays listed after it closes.
+func TestRelayListsConnections(t *testing.T) {
+	d := testDaemon(t)
+	cli, err := net.Dial("tcp", relayVia(t, d, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli.SetDeadline(time.Now().Add(2 * time.Second))
+	cli.Write([]byte("hello"))
+	if _, err := io.ReadFull(cli, make([]byte, 5)); err != nil {
+		t.Fatal(err)
+	}
+	waitConn := func(cond func(connView) bool) connView {
+		t.Helper()
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			if cs := d.conns.list(); len(cs) == 1 && cond(cs[0]) {
+				return cs[0]
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("connections: %+v", d.conns.list())
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	c := waitConn(func(c connView) bool { return c.BytesUp == 5 && c.BytesDown == 5 })
+	if c.Client != cli.LocalAddr().String() || c.Upstream != "127.0.0.1" || c.BytesUp != 5 || c.End != "" || c.Err != "" {
+		t.Fatalf("open connection: %+v", c)
+	}
+	cli.Close()
+	waitConn(func(c connView) bool { return c.End != "" && c.BytesDown == 5 && c.Err == "" })
+}
+
+// A connection that finds no active is listed as failed, with the reason.
+func TestRelayListsFailedConnections(t *testing.T) {
+	d := testDaemon(t)
+	cli, err := net.Dial("tcp", relayVia(t, d, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if cs := d.conns.list(); len(cs) == 1 && cs[0].End != "" && cs[0].Err != "" && cs[0].Upstream == "" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("connections: %+v", d.conns.list())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// Closed connections are kept in a bounded ring, newest first; open ones are
+// always listed, before the closed ones.
+func TestConnLogKeepsRecentClosed(t *testing.T) {
+	var l connLog
+	busy := l.start("192.0.2.1:1000", t0)
+	for i := range recentConns + 50 {
+		at := t0.Add(time.Duration(i+1) * time.Second)
+		l.end(l.start(fmt.Sprintf("192.0.2.2:%d", i), at), "", at)
+	}
+	cs := l.list()
+	if len(cs) != recentConns+1 || cs[0].Client != busy.client || cs[0].End != "" {
+		t.Fatalf("got %d entries, first %+v", len(cs), cs[0])
+	}
+	if want := fmt.Sprintf("192.0.2.2:%d", recentConns+49); cs[1].Client != want {
+		t.Fatalf("newest closed first: got %s, want %s", cs[1].Client, want)
 	}
 }

@@ -167,6 +167,7 @@ the daemon through its Unix socket.
 | `cfipd prefixes` | Inspect learned prefix statistics |
 | `cfipd relay` | Per-endpoint connection and traffic statistics |
 | `cfipd clients` | Relay connections and traffic per client IP since start (at most 256 clients) |
+| `cfipd conns` | Each open relay connection and the latest 100 closed ones: client, upstream, duration, traffic |
 | `cfipd scan` | Schedule a discovery probe |
 | `cfipd import FILE` | Import IPs or a CloudflareSpeedTest CSV as candidate seeds |
 | `cfipd promote IP` | Qualify a standby for a vacant active slot |
@@ -176,7 +177,7 @@ the daemon through its Unix socket.
 
 The dashboard can also be started directly with `cfipd web`. It listens on
 `127.0.0.1:8080` by default; `-listen` changes the bind address. Its read-only APIs
-are `/api/status`, `/api/standbys`, `/api/relay`, and `/api/clients`. The page requests them with
+are `/api/status`, `/api/standbys`, `/api/relay`, `/api/clients`, and `/api/conns`. The page requests them with
 relative paths, so a reverse proxy can mount the dashboard under a subpath such as
 `/cfipd/`. The proxy must strip the prefix, and the page URL must end with `/`.
 

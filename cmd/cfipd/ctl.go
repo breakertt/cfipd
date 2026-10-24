@@ -212,6 +212,8 @@ func (d *daemon) handleCtl(req ctlRequest) {
 		rep.v = "added"
 	case "/clients":
 		rep.v = d.clients.list()
+	case "/conns":
+		rep.v = d.conns.list()
 	case "/relay":
 		type rs struct {
 			Addr      string  `json:"addr"`

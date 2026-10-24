@@ -16,6 +16,7 @@ var webAPI = map[string]string{
 	"/api/standbys": "/standbys",
 	"/api/relay":    "/relay",
 	"/api/clients":  "/clients",
+	"/api/conns":    "/conns",
 }
 
 // serveWeb runs the read-only dashboard. It talks to the daemon exclusively

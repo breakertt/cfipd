@@ -47,7 +47,7 @@
   .tag { font:.66rem var(--mono); color:var(--muted); border:1px solid var(--line); border-radius:4px; padding:.05em .4em; }
   .tag.warn { color:var(--warn); border-color:var(--warn); }
   .big { display:flex; justify-content:space-between; gap:.8rem; margin:.9rem 0 .8rem; }
-  .big .v { font-size:1.65rem; font-weight:600; line-height:1.1; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .big .v { font-size:1.3rem; font-weight:600; line-height:1.1; font-variant-numeric:tabular-nums; white-space:nowrap; }
   .big .v small { font-size:.72rem; font-weight:500; color:var(--muted); margin-left:.2em; }
   .big .k { font-size:.7rem; color:var(--muted); margin-top:.25rem; white-space:nowrap; }
   .meta { display:grid; grid-template-columns:auto 1fr auto 1fr; gap:.3rem .7rem; padding-top:.65rem; border-top:1px solid var(--line);
@@ -63,6 +63,8 @@
   .last { font:.74rem var(--mono); color:var(--muted); overflow-wrap:anywhere; }
 
   .tw { overflow-x:auto; }
+  .tw.scroll { max-height:26rem; overflow-y:auto; }
+  .tw.scroll th { position:sticky; top:0; background:var(--panel); }
   table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
   th, td { padding:.55rem .85rem; white-space:nowrap; text-align:right; border-bottom:1px solid var(--line); }
   th.l, td.l { text-align:left; }
@@ -72,6 +74,7 @@
   td.rank, td.dim { color:var(--muted); }
   td .addr { font-weight:500; margin-right:.4rem; }
   td .dot { margin-right:.55rem; }
+  td.brk { white-space:normal; overflow-wrap:break-word; }
   .off { color:var(--muted); opacity:.45; }
   .delta { font-size:.75rem; margin-left:.35rem; }
   @media (max-width:640px) { th, td { padding:.5rem .55rem; } .opt { display:none; } }
@@ -79,7 +82,7 @@
   .ov { padding:1rem 1.1rem .95rem; }
   .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(112px,1fr)); gap:1rem 1.2rem; }
   .kpi .k { font:600 .6rem var(--mono); letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
-  .kpi .v { font-size:1.35rem; font-weight:600; line-height:1.2; margin-top:.3rem; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .kpi .v { font-size:1.15rem; font-weight:600; line-height:1.2; margin-top:.3rem; font-variant-numeric:tabular-nums; white-space:nowrap; }
   .kpi .v small { font-size:.7rem; font-weight:500; color:var(--muted); margin-left:.2em; }
   .kpi { min-width:0; }
   .kpi .s { font:.68rem var(--mono); color:var(--muted); margin-top:.1rem; }
@@ -118,6 +121,9 @@
 <h2><span data-i18n="h_clients">Clients</span><small data-i18n="sub_clients"></small></h2>
 <div id="clients"></div>
 
+<h2><span data-i18n="h_conns">Connections</span><small data-i18n="sub_conns"></small></h2>
+<div id="conns"></div>
+
 <h2><span data-i18n="h_select">Selection</span></h2>
 <div class="card sel" id="select"></div>
 
@@ -137,6 +143,9 @@ const I18N = {
     title: 'cfipd dashboard', refresh: 'Refresh',
     h_overview: 'Overview', h_active: 'Active', sub_active: 'entry points that serve relay traffic now',
     h_clients: 'Clients', sub_clients: 'relay users since start, last seen first',
+    h_conns: 'Connections', sub_conns: 'open first, then the latest 100 closed',
+    th_upstream: 'Upstream', th_started: 'Started', th_duration: 'Duration', th_state: 'State',
+    c_open: 'open', c_closed: 'closed', c_failed: 'failed', no_conns: 'No relay connection since start',
     h_select: 'Selection', h_standby: 'Standby', sub_standby: 'ranked, best first · green: ms faster than the slowest active',
     st_loading: 'Loading…', st_nocon: 'Cannot reach cfipd', st_lost: 'Connection lost', st_stale: 'Data is stale',
     st_none: 'No active IP', st_serving: n => `${n} active ${n === 1 ? 'IP' : 'IPs'} serving`, st_degraded: n => ` · ${n} degraded`,
@@ -159,6 +168,9 @@ const I18N = {
     title: 'cfipd 仪表盘', refresh: '刷新',
     h_overview: '概览', h_active: 'Active', sub_active: '当前承载 relay 流量的入口',
     h_clients: '客户端', sub_clients: '自启动以来使用 relay 的客户端，最近的在前',
+    h_conns: '连接', sub_conns: '进行中的在前，其后是最近结束的 100 条',
+    th_upstream: '上游', th_started: '开始', th_duration: '时长', th_state: '状态',
+    c_open: '进行中', c_closed: '已结束', c_failed: '失败', no_conns: '启动以来还没有 relay 连接',
     h_select: '选择', h_standby: 'Standby', sub_standby: '按优先级排名 · 绿色数字：比最慢的 Active 快多少 ms',
     st_loading: '加载中…', st_nocon: '无法连接 cfipd', st_lost: '连接中断', st_stale: '数据过期',
     st_none: '没有 Active IP', st_serving: n => `${n} 个 Active 在转发`, st_degraded: n => ` · ${n} 个降级`,
@@ -193,8 +205,16 @@ const ms = v => v ? Math.round(v) + ' ms' : '—';
 // fail_rate is omitted from the JSON when it is zero.
 const failPct = v => v.samples > 0 ? ((v.fail_rate || 0) * 100).toFixed(0) + '%' : '—';
 const fam = a => a.includes(':') ? 'IPv6' : 'IPv4';
+const brk = a => esc(a).replace(/:/g, ':<wbr>'); // IPv6 breaks only at colons
 // Go durations: "4m0s" -> "4m", "1h16m53s" -> "1h16m".
 const dur = s => s ? esc(String(s).replace(/(h\d+m)[\d.]+s$/, '$1').replace(/([hm])0s$/, '$1').replace(/h0m$/, 'h')) : '—';
+function secs(s) {
+  s = Math.max(0, Math.round(s));
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s / 60) + 'm' + (s % 60) + 's';
+  return Math.floor(s / 3600) + 'h' + Math.floor(s % 3600 / 60) + 'm';
+}
+const clock = iso => new Date(iso).toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en-GB', { hour12: false });
 function bytes(n) {
   if (!n) return '0 B';
   const u = ['B','KB','MB','GB','TB']; let i = 0;
@@ -222,7 +242,7 @@ function setBadge() {
   el.innerHTML = `<span class="dot"></span>${esc(text)}`;
 }
 
-function render(status, standbys, relay, clients) {
+function render(status, standbys, relay, clients, conns) {
   const relayBy = Object.fromEntries(relay.map(r => [r.addr, r]));
   const degraded = status.actives.filter(a => a.state !== 'healthy').length;
   const rt = relay.reduce((s, r) => ({ n: s.n + r.total, up: s.up + r.bytes_up, down: s.down + r.bytes_down }), { n: 0, up: 0, down: 0 });
@@ -248,7 +268,7 @@ function render(status, standbys, relay, clients) {
     return `<div class="card ip">
       <div class="ch">
         <span class="dot ${bad ? 'warn' : 'ok'}" title="${esc(stateText(a.state))}"></span>
-        <span class="addr">${esc(a.addr).replace(/:/g, ':<wbr>')}</span>
+        <span class="addr">${brk(a.addr)}</span>
         <span class="tags">${bad ? `<span class="tag warn">${esc(stateText(a.state))}</span>` : ''}<span class="tag">${esc(a.colo || '?')}</span><span class="tag">${fam(a.addr)}</span></span>
       </div>
       <div class="big">
@@ -268,11 +288,21 @@ function render(status, standbys, relay, clients) {
   $('clients').innerHTML = clients.length ? `<div class="card tw"><table>
     <thead><tr><th class="l">${t('th_client')}</th><th class="opt">${t('th_open')}</th><th class="opt">${t('th_conns')}</th><th class="opt">${t('th_failed')}</th>
       <th class="opt">${t('th_up')}</th><th>${t('th_down')}</th><th>${t('th_last')}</th></tr></thead>
-    <tbody>${clients.map(c => `<tr><td class="l"><span class="dot ${c.open > 0 ? 'ok' : 'off'}"></span><span class="mono addr">${esc(c.addr)}</span></td>
+    <tbody>${clients.map(c => `<tr><td class="l brk"><span class="dot ${c.open > 0 ? 'ok' : 'off'}"></span><span class="mono addr">${brk(c.addr)}</span></td>
       <td class="opt">${c.open}</td><td class="opt">${c.total}</td><td class="opt ${c.fails ? 'bad' : 'dim'}">${c.fails}</td>
       <td class="opt">${bytes(c.bytes_up)}</td><td>${bytes(c.bytes_down)}</td>
       <td class="${c.open > 0 ? 'ok' : 'dim'}">${c.open > 0 ? t('online') : ago(c.last_seen)}</td></tr>`).join('')}</tbody>
     </table></div>` : `<div class="empty">${t('no_clients')}</div>`;
+
+  $('conns').innerHTML = conns.length ? `<div class="card tw scroll"><table>
+    <thead><tr><th class="l">${t('th_client')}</th><th class="l opt">${t('th_upstream')}</th><th class="opt">${t('th_started')}</th>
+      <th>${t('th_duration')}</th><th class="opt">${t('th_up')}</th><th>${t('th_down')}</th><th>${t('th_state')}</th></tr></thead>
+    <tbody>${conns.map(c => {
+      const [cls, st] = !c.end ? ['ok', t('c_open')] : c.error ? ['bad', t('c_failed')] : ['dim', t('c_closed')];
+      return `<tr><td class="l mono brk">${brk(c.client)}</td><td class="l mono opt ${c.upstream ? '' : 'dim'}">${esc(c.upstream || '—')}</td>
+        <td class="opt dim">${clock(c.start)}</td><td>${secs(c.seconds)}</td><td class="opt">${bytes(c.bytes_up)}</td>
+        <td>${bytes(c.bytes_down)}</td><td class="${cls}"${c.error ? ` title="${esc(c.error)}"` : ''}>${st}</td></tr>`;
+    }).join('')}</tbody></table></div>` : `<div class="empty">${t('no_conns')}</div>`;
 
   const pk = status.pk || {};
   const pkState = pk.running ? ['ok', t('pk_comparing')]
@@ -323,13 +353,13 @@ async function poll() {
   inflight = true;
   $('refresh').disabled = true;
   try {
-    const [status, standbys, relay, clients] = await Promise.all(
-      ['api/status', 'api/standbys', 'api/relay', 'api/clients'].map(async u => {
+    const [status, standbys, relay, clients, conns] = await Promise.all(
+      ['api/status', 'api/standbys', 'api/relay', 'api/clients', 'api/conns'].map(async u => {
         const r = await fetch(u);
         if (!r.ok) throw new Error(u + ': HTTP ' + r.status + ' ' + (await r.text()).trim());
         return r.json();
       }));
-    lastData = [status, standbys || [], relay || [], clients || []];
+    lastData = [status, standbys || [], relay || [], clients || [], conns || []];
     render(...lastData);
     lastOK = Date.now();
     failed = false;

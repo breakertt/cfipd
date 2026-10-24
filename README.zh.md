@@ -151,6 +151,7 @@ systemd 的目录设置和权限。
 | `cfipd prefixes` | 查看前缀学习统计 |
 | `cfipd relay` | 各入口的连接与流量统计 |
 | `cfipd clients` | 启动以来各客户端 IP 的 relay 连接与流量（最多记 256 个） |
+| `cfipd conns` | 每条进行中的 relay 连接和最近结束的 100 条：客户端、上游、时长、流量 |
 | `cfipd scan` | 安排一次新地址探测 |
 | `cfipd import FILE` | 将 IP 列表或 CloudflareSpeedTest CSV 导入为候选种子 |
 | `cfipd promote IP` | 验证一个 Standby，尝试补入空缺的现役位置 |
@@ -159,7 +160,7 @@ systemd 的目录设置和权限。
 | `cfipd version` | 查看版本、源码提交和构建时间 |
 
 也可直接执行 `cfipd web` 启动面板，默认监听 `127.0.0.1:8080`，用 `-listen` 调整地址。
-只读 API 为 `/api/status`、`/api/standbys`、`/api/relay` 和 `/api/clients`。页面用相对路径请求它们，
+只读 API 为 `/api/status`、`/api/standbys`、`/api/relay`、`/api/clients` 和 `/api/conns`。页面用相对路径请求它们，
 反向代理可以把面板挂在 `/cfipd/` 这类子路径下：转发时要去掉前缀，页面地址要以 `/` 结尾。
 
 ## 工作机制

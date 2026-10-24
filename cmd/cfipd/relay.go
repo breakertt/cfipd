@@ -113,6 +113,92 @@ func (t *clientTable) list() []clientView {
 	return out
 }
 
+// recentConns bounds the closed connections that connLog keeps.
+const recentConns = 100
+
+// connLog lists each open relay connection and the most recent closed ones.
+// Relay goroutines write it under mu; bytes are atomic because the copy loops
+// add to them. An open connection already holds two copy buffers, so its
+// record adds little.
+type connLog struct {
+	mu     sync.Mutex
+	open   map[*connRecord]struct{}
+	recent []*connRecord // ring of closed connections, oldest first
+}
+
+type connRecord struct {
+	client             string    // ip:port of the client
+	upstream, err      string    // guarded by connLog.mu
+	start, end         time.Time // end guarded by connLog.mu; zero while open
+	bytesUp, bytesDown atomic.Int64
+}
+
+type connView struct {
+	Client    string  `json:"client"`
+	Upstream  string  `json:"upstream,omitempty"`
+	Start     string  `json:"start"`
+	End       string  `json:"end,omitempty"`
+	Seconds   float64 `json:"seconds"`
+	BytesUp   int64   `json:"bytes_up"`
+	BytesDown int64   `json:"bytes_down"`
+	Err       string  `json:"error,omitempty"`
+}
+
+func (l *connLog) start(client string, now time.Time) *connRecord {
+	r := &connRecord{client: client, start: now}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.open == nil {
+		l.open = map[*connRecord]struct{}{}
+	}
+	l.open[r] = struct{}{}
+	return r
+}
+
+func (l *connLog) dialed(r *connRecord, upstream string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	r.upstream = upstream
+}
+
+func (l *connLog) end(r *connRecord, err string, now time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.open, r)
+	r.end, r.err = now, err
+	if len(l.recent) == recentConns {
+		l.recent = append(l.recent[:0], l.recent[1:]...)
+	}
+	l.recent = append(l.recent, r)
+}
+
+// list returns the open connections, newest first, then the closed ones,
+// newest first.
+func (l *connLog) list() []connView {
+	now := time.Now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	view := func(r *connRecord) connView {
+		v := connView{Client: r.client, Upstream: r.upstream, Start: r.start.Format(time.RFC3339),
+			BytesUp: r.bytesUp.Load(), BytesDown: r.bytesDown.Load(), Err: r.err}
+		end := now
+		if !r.end.IsZero() {
+			end, v.End = r.end, r.end.Format(time.RFC3339)
+		}
+		v.Seconds = end.Sub(r.start).Seconds()
+		return v
+	}
+	out := make([]connView, 0, len(l.open)+len(l.recent))
+	for r := range l.open {
+		out = append(out, view(r))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Seconds < out[j].Seconds })
+	for i := len(l.recent) - 1; i >= 0; i-- {
+		out = append(out, view(l.recent[i]))
+	}
+	return out
+}
+
 // relayBufs holds the copy buffers of relay connections.
 var relayBufs = sync.Pool{New: func() any { b := make([]byte, 16<<10); return &b }}
 
@@ -233,7 +319,15 @@ func (d *daemon) handleRelayConn(c net.Conn) {
 		host = c.RemoteAddr().String()
 	}
 	cs, served := d.clients.open(host, time.Now()), false
-	defer func() { d.clients.done(cs, !served, time.Now()) }()
+	cr, why := d.conns.start(c.RemoteAddr().String(), time.Now()), "no active"
+	defer func() {
+		if served {
+			why = ""
+		}
+		now := time.Now()
+		d.clients.done(cs, !served, now)
+		d.conns.end(cr, why, now)
+	}()
 	ts, _ := d.relaySnap.Load().([]relayTarget)
 	if len(ts) == 0 {
 		return
@@ -255,6 +349,7 @@ func (d *daemon) handleRelayConn(c net.Conn) {
 			res.probe.Hard = classifyErr(err)
 			res.probe.Err = err.Error()
 			t.Stat.Conns.Add(-1)
+			why = err.Error()
 		}
 		select {
 		case d.results <- res:
@@ -269,20 +364,21 @@ func (d *daemon) handleRelayConn(c net.Conn) {
 		return
 	}
 	served = true
+	d.conns.dialed(cr, chosen.Addr)
 	defer up.Close()
 	defer chosen.Stat.Conns.Add(-1)
 
 	st := chosen.Stat
 	done := make(chan struct{}, 2)
 	go func() {
-		copyCounted(up, c, &st.BytesUp, &cs.up)
+		copyCounted(up, c, &st.BytesUp, &cs.up, &cr.bytesUp)
 		if tc, ok := up.(*net.TCPConn); ok {
 			tc.CloseWrite()
 		}
 		done <- struct{}{}
 	}()
 	go func() {
-		copyCounted(c, up, &st.BytesDown, &cs.down)
+		copyCounted(c, up, &st.BytesDown, &cs.down, &cr.bytesDown)
 		if tc, ok := c.(*net.TCPConn); ok {
 			tc.CloseWrite()
 		}

@@ -34,6 +34,7 @@ control (talks to the running daemon over the unix socket):
   scan                    trigger one discovery scan now
   relay                   relay traffic stats per active
   clients                 relay connections and traffic per client IP
+  conns                   open relay connections and the latest 100 closed ones
   import <file>           seed candidates from cfst result.csv or IP list
 
 web dashboard (read-only, separate process; talks to the daemon over the unix socket):
@@ -122,7 +123,7 @@ func main() {
 			log.Fatalf("run: %v", err)
 		}
 
-	case "status", "actives", "standbys", "candidates", "prefixes", "scan", "relay", "clients":
+	case "status", "actives", "standbys", "candidates", "prefixes", "scan", "relay", "clients", "conns":
 		ctlPrint(cfg.Socket, "/"+os.Args[1], "")
 
 	case "web":
