@@ -1,7 +1,7 @@
 # AGENTS.md
 
 本文件是 cfipd 仓库内代码 agent 的项目约定；用户的当前指令优先。
-使用方式和设计说明见 [README.md](README.md)，默认参数以 `config.go` 为准，构建矩阵以
+使用方式和设计说明见 [README.md](README.md)，默认参数以 `cmd/cfipd/config.go` 为准，构建矩阵以
 `scripts/release.sh` 为准。修改行为时同步更新相关文档，不在这里复制整套参数表。
 
 除文档（`README.md`、`README.zh.md`、本文件）外，仓库内的一切——代码、注释、日志和错误信息、脚本、提交信息——一律使用英文。唯一的例外是 `web.html` 里的 `I18N.zh` 翻译表：面板是中英双语的，英文是源语言，按浏览器语言自动选择，右上角可切换并记住选择。
@@ -15,6 +15,8 @@
 cfipd 是 Go 标准库实现的 Cloudflare HTTPS relay、IP 优选 daemon 和只读 Web 面板。
 对使用者描述 HTTPS 用途；实现层是 L4 TCP 透传，TLS 在客户端与 Cloudflare 之间端到端
 建立，不在 relay 终止，也不实现 HTTP CONNECT 代理协议。
+
+Go 源码是 `cmd/cfipd/` 下的单个 main 包，下表中的源文件都在这个目录。
 
 | 文件 | 职责 |
 |---|---|

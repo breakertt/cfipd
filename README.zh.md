@@ -115,7 +115,7 @@ systemd 服务明确读取 `/etc/cfipd.json`。直接运行时，cfipd 依次查
 | `scan_v6_ratio` | 新地址发现中分配给 IPv6 的比例 | `0.2` |
 | `promote_min_mbps` | 转正所需的最低吞吐量 | `30` |
 
-完整配置见 [config.go](https://github.com/breakertt/cfipd/blob/main/config.go)。
+完整配置见 [config.go](https://github.com/breakertt/cfipd/blob/main/cmd/cfipd/config.go)。
 直接运行默认使用 `/tmp/cfipd.sock`，Debian 包通过配置改为 `/run/cfipd/ctl.sock`。
 直接运行需要对数据和 socket 位置有写权限；若调整打包服务的这些路径，还需同步调整
 systemd 的目录设置和权限。
@@ -189,7 +189,7 @@ TLS 握手和 HTTP 请求由客户端与 Cloudflare 处理。复用同一条 HTT
 运行时组件。
 
 ```bash
-go build -o cfipd .
+go build -o cfipd ./cmd/cfipd
 go vet ./...
 go test -race -count=1 ./...
 ```

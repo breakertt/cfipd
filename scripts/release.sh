@@ -15,7 +15,7 @@ cd "$root"
 while read -r label goarch debarch goarm; do
     binary="$output/cfipd_${version}_linux_${label}"
     CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" GOARM="$goarm" GOAMD64=v1 \
-        go build -trimpath -ldflags "-s -w -X main.version=v$version -X main.commit=$commit -X main.buildDate=$build_date" -o "$binary" .
+        go build -trimpath -ldflags "-s -w -X main.version=v$version -X main.commit=$commit -X main.buildDate=$build_date" -o "$binary" ./cmd/cfipd
     stage=$(mktemp -d "$output/.packages/${debarch}.XXXXXX")
     install -Dm755 "$binary" "$stage/usr/bin/cfipd"
     install -Dm644 packaging/cfipd.json "$stage/etc/cfipd.json"

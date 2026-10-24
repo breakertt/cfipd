@@ -126,7 +126,7 @@ like this:
 | `promote_min_mbps` | Minimum throughput required for promotion | `30` |
 
 The full configuration is defined in
-[config.go](https://github.com/breakertt/cfipd/blob/main/config.go). A direct run
+[config.go](https://github.com/breakertt/cfipd/blob/main/cmd/cfipd/config.go). A direct run
 uses `/tmp/cfipd.sock` unless overridden; the Debian package supplies the
 `/run/cfipd/ctl.sock` setting. Direct runs need write access to their data and
 socket locations. If changing those paths for a packaged service, also adjust its
@@ -216,7 +216,7 @@ Use the Go version required by `go.mod` (currently Go 1.27 or newer). The projec
 uses the Go standard library without external runtime dependencies.
 
 ```bash
-go build -o cfipd .
+go build -o cfipd ./cmd/cfipd
 go vet ./...
 go test -race -count=1 ./...
 ```
