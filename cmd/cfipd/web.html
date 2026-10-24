@@ -2,10 +2,11 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>cfipd</title>
 <style>
   * { box-sizing:border-box; margin:0; padding:0; }
+  html { touch-action:pan-x pan-y; -webkit-text-size-adjust:100%; } /* no pinch or double-tap zoom */
   :root { color-scheme:light dark;
     --bg:#eef1ef; --panel:#fbfcfb; --ink:#131a17; --muted:#5d6b64; --line:#dbe2dd; --soft:#f1f4f2;
     --ok:#15803d; --warn:#b45309; --bad:#dc2626; --accent:#0d7d72;
@@ -375,6 +376,10 @@ async function poll() {
     timer = setTimeout(poll, POLL_MS);
   }
 }
+
+// No pinch zoom on phones: iOS Safari ignores user-scalable=no and touch-action.
+for (const e of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(e, ev => ev.preventDefault(), { passive: false });
+document.addEventListener('touchmove', ev => { if (ev.touches.length > 1) ev.preventDefault(); }, { passive: false });
 
 $('refresh').onclick = () => { clearTimeout(timer); poll(); };
 $('lang').onclick = () => {
