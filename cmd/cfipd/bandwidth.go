@@ -7,23 +7,18 @@ import (
 	"time"
 )
 
-// recheckBandwidth re-measures one active whose latest bandwidth sample is
-// older than SpeedRecheck. Only one bandwidth download runs at a time, so a
-// recheck never overlaps a promotion or PK measurement.
+// recheckBandwidth re-measures one active whose SpeedDue has passed (never
+// measured: due at once). It waits for the long-job slot and the download
+// gap, so it never overlaps another bandwidth download.
 func (d *daemon) recheckBandwidth(now time.Time) {
-	every := d.cfg.SpeedRecheck.Duration
-	if every <= 0 || d.promoting || d.pkRunning || d.rechecking {
+	if d.cfg.SpeedRecheck.Duration <= 0 || d.longJobBlocked(now) != "" {
 		return
 	}
 	for _, a := range d.pool.actives() {
-		last := a.SpeedAt
-		if t := d.recheckAt[a.Addr]; t.After(last) {
-			last = t // a failed download waits a full interval too
-		}
-		if now.Sub(last) < every {
+		if now.Before(a.SpeedDue) {
 			continue
 		}
-		d.recheckAt[a.Addr] = now
+		a.SpeedDue = now.Add(d.cfg.SpeedRecheck.Duration) // a failed download waits a full interval
 		d.rechecking = true
 		j := job{kind: jRecheck, ip: a.Addr, gen: a.Gen}
 		log.Printf("bandwidth recheck: %s (last %.1fMbps)", a.Addr, a.Speed)
@@ -41,6 +36,11 @@ func (d *daemon) execRecheck(ctx context.Context, j job) jobResult {
 	return res
 }
 
+// validSpeed reports whether a download result is a usable bandwidth sample.
+func (d *daemon) validSpeed(s SpeedResult) bool {
+	return s.Err == "" && (s.Colo == "" || d.cfg.coloAllowed(s.Colo))
+}
+
 // applyRecheck records a fresh bandwidth sample of an active. A failed or
 // wrong-colo download keeps the previous sample.
 func (d *daemon) applyRecheck(r jobResult, ip *IP, now time.Time) {
@@ -50,29 +50,32 @@ func (d *daemon) applyRecheck(r jobResult, ip *IP, now time.Time) {
 	}
 	d.store.Log(map[string]any{"type": "speed_check", "ip": r.ip, "mbps": r.speed.Mbps,
 		"bytes": r.speed.Bytes, "colo": r.speed.Colo, "err": r.speed.Err, "t": now})
-	if ip == nil || ip.Role != RoleActive || r.speed.Err != "" ||
-		(r.speed.Colo != "" && !d.cfg.coloAllowed(r.speed.Colo)) {
+	if ip == nil || ip.Role != RoleActive || !d.validSpeed(r.speed) {
 		return
 	}
-	ip.Speed, ip.SpeedAt = r.speed.Mbps, now
-	if ip.belowFloor(d.cfg) {
-		d.logEvent(fmt.Sprintf("%s bandwidth %.1fMbps < %.1fMbps floor; seeking a replacement",
+	d.pool.recordSpeed(ip, r.speed.Mbps, now)
+	switch {
+	case ip.BelowFloorN == 1:
+		d.logEvent(fmt.Sprintf("%s bandwidth %.1fMbps < %.1fMbps floor; confirming in about an hour",
+			ip.Addr, ip.Speed, d.cfg.PromoteMinMbps), now)
+	case ip.belowFloor():
+		d.logEvent(fmt.Sprintf("%s bandwidth %.1fMbps < %.1fMbps floor (confirmed); seeking a replacement",
 			ip.Addr, ip.Speed, d.cfg.PromoteMinMbps), now)
 	}
 }
 
-// replaceLowBandwidth tries to replace the slowest below-floor active. The
-// node keeps serving, with a quarter of the relay weight, until a standby
-// passes the full promotion test; the swap is one-for-one. Each below-floor
-// sample triggers at most one attempt, so downloads stay bounded by
-// SpeedRecheck.
+// replaceLowBandwidth tries to replace the slowest confirmed below-floor
+// active. The node keeps serving, with a quarter of the relay weight, until a
+// standby passes the full promotion test; the swap is one-for-one. Each
+// below-floor sample triggers at most one attempt, so downloads stay bounded
+// by SpeedRecheck.
 func (d *daemon) replaceLowBandwidth(now time.Time) {
-	if d.promoting || d.pkRunning || d.rechecking {
+	if d.longJobBlocked(now) != "" {
 		return
 	}
 	var low *IP
 	for _, a := range d.pool.actives() {
-		if a.belowFloor(d.cfg) && !d.lowBWTried[a.Addr].Equal(a.SpeedAt) && (low == nil || a.Speed < low.Speed) {
+		if a.belowFloor() && !d.lowBWTried[a.Addr].Equal(a.SpeedAt) && (low == nil || a.Speed < low.Speed) {
 			low = a
 		}
 	}

@@ -41,6 +41,7 @@ type snapshot struct {
 	Day       string                 `json:"day,omitempty"`
 	DayCounts map[string]int         `json:"day_counts,omitempty"`
 	DayBytes  int64                  `json:"day_bytes,omitempty"`
+	SpeedNext time.Time              `json:"speed_next,omitempty"`
 }
 
 func OpenStore(dir string) (*Store, error) {
@@ -163,6 +164,7 @@ func (s *Store) Load(pool *Pool, scan *Scanner) error {
 		log.Printf("PK observe-only until %s", snap.PK.ObserveUntil.Format(time.RFC3339))
 	}
 	pool.pk = snap.PK
+	pool.speedNext = snap.SpeedNext
 	if snap.Day == now.Format("2006-01-02") {
 		pool.day, pool.dayBytes = snap.Day, snap.DayBytes
 		if snap.DayCounts != nil {
@@ -230,7 +232,7 @@ func synthesizedWin(win []Obs) bool {
 
 func (s *Store) Save(pool *Pool, scan *Scanner) error {
 	snap := snapshot{SavedAt: time.Now(), IPs: pool.ips, Prefixes: scan.stats, PK: pool.pk,
-		Day: pool.day, DayCounts: pool.dayCounts, DayBytes: pool.dayBytes}
+		Day: pool.day, DayCounts: pool.dayCounts, DayBytes: pool.dayBytes, SpeedNext: pool.speedNext}
 	b, err := json.Marshal(snap)
 	if err != nil {
 		return err

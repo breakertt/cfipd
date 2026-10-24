@@ -193,12 +193,13 @@ func zoneRestricted(ctx context.Context, cfg *Config, ip string) (bool, error) {
 }
 
 type SpeedResult struct {
-	Mbps  float64
-	Bytes int64
-	Dur   time.Duration
-	Colo  string
-	Err   string
-	Hard  bool
+	Status int // HTTP status of the download response; 0 without a response
+	Mbps   float64
+	Bytes  int64
+	Dur    time.Duration
+	Colo   string
+	Err    string
+	Hard   bool
 }
 
 func speedTest(ctx context.Context, cfg *Config, ip string) SpeedResult {
@@ -234,6 +235,7 @@ func speedTest(ctx context.Context, cfg *Config, ip string) SpeedResult {
 		return res
 	}
 	defer resp.Body.Close()
+	res.Status = resp.StatusCode
 	if resp.StatusCode != http.StatusOK {
 		res.Err = fmt.Sprintf("status %d", resp.StatusCode)
 		return res

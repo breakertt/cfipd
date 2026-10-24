@@ -58,7 +58,7 @@ func (d *daemon) updateRelaySnap() {
 			lat = 500
 		}
 		w := 1 / lat
-		if a.State == StateDegraded || a.belowFloor(d.cfg) {
+		if a.State == StateDegraded || a.belowFloor() {
 			w /= 4
 		}
 		ts = append(ts, relayTarget{Addr: a.Addr, Weight: w, Stat: st, Gen: a.Gen})

@@ -59,6 +59,10 @@ type IP struct {
 
 	Speed   float64   `json:"speed_mbps,omitempty"`
 	SpeedAt time.Time `json:"speed_at,omitempty"`
+	// BelowFloorN counts consecutive bandwidth samples under the promotion
+	// floor; SpeedDue is when an active's next bandwidth recheck is due.
+	BelowFloorN int       `json:"below_floor_n,omitempty"`
+	SpeedDue    time.Time `json:"speed_due,omitempty"`
 
 	NextProbe     time.Time `json:"next_probe"`
 	CooldownUntil time.Time `json:"cooldown_until,omitempty"`
@@ -90,11 +94,9 @@ func (ip *IP) okRTTs() []float64 {
 
 func (ip *IP) medianRTT() float64 { return median(ip.okRTTs()) }
 
-// belowFloor reports whether the latest bandwidth sample fell under the
-// promotion floor.
-func (ip *IP) belowFloor(cfg *Config) bool {
-	return !ip.SpeedAt.IsZero() && ip.Speed < cfg.PromoteMinMbps
-}
+// belowFloor reports whether two consecutive bandwidth samples fell under the
+// promotion floor: one short sample is not enough to act on.
+func (ip *IP) belowFloor() bool { return ip.BelowFloorN >= 2 }
 
 func (ip *IP) jitter() float64 {
 	xs := ip.okRTTs()
@@ -150,6 +152,8 @@ type Pool struct {
 	ips map[string]*IP
 	rnd *rand.Rand
 	pk  *pkPersist
+
+	speedNext time.Time // earliest next bandwidth download (SpeedGap, HTTP 429 pause)
 
 	day       string         // UTC day of dayCounts/dayBytes
 	dayCounts map[string]int // physical probes per kind today
@@ -564,6 +568,24 @@ func (p *Pool) demoteToStandby(ip *IP, now time.Time) {
 	ip.DegradedSince = time.Time{}
 	ip.NextProbe = now
 	ip.Gen++
+}
+
+// recordSpeed stores a valid bandwidth sample, counts consecutive samples
+// under the promotion floor and schedules the next recheck: about an hour
+// after a first low sample to confirm it, else SpeedRecheck; both jittered so
+// rechecks do not lock to fixed times of day.
+func (p *Pool) recordSpeed(ip *IP, mbps float64, now time.Time) {
+	ip.Speed, ip.SpeedAt = mbps, now
+	if mbps < p.cfg.PromoteMinMbps {
+		ip.BelowFloorN++
+	} else {
+		ip.BelowFloorN = 0
+	}
+	every := p.cfg.SpeedRecheck.Duration
+	if ip.BelowFloorN == 1 {
+		every = time.Hour
+	}
+	ip.SpeedDue = now.Add(p.jitterDown(every))
 }
 
 // swapPK atomically replaces incumbent active with challenger standby.

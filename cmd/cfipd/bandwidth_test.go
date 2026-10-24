@@ -6,15 +6,15 @@ import (
 )
 
 // TestBandwidthRecheckDueActives: actives are re-measured one at a time once
-// their latest sample is older than SpeedRecheck; a fresh sample waits, and no
-// recheck starts while another bandwidth download may run.
+// their SpeedDue passes; a never-measured active is due at once, and no
+// recheck starts while another long job may download.
 func TestBandwidthRecheckDueActives(t *testing.T) {
 	d := testDaemon(t)
 	d.ctx = cancelledCtx()
 	d.cfg.SpeedRecheck = Duration{12 * time.Hour}
 	old, never, fresh := sinActive("198.18.0.1", 300), sinActive("198.18.1.1", 300), sinActive("198.18.2.1", 300)
-	old.Speed, old.SpeedAt = 80, t0.Add(-13*time.Hour)
-	fresh.Speed, fresh.SpeedAt = 80, t0.Add(-time.Hour)
+	old.Speed, old.SpeedAt, old.SpeedDue = 80, t0.Add(-13*time.Hour), t0.Add(-time.Hour)
+	fresh.Speed, fresh.SpeedAt, fresh.SpeedDue = 80, t0.Add(-time.Hour), t0.Add(11*time.Hour)
 	for _, a := range []*IP{old, never, fresh} {
 		d.pool.ips[a.Addr] = a
 	}
@@ -26,50 +26,75 @@ func TestBandwidthRecheckDueActives(t *testing.T) {
 	d.pkRunning = false
 	for range 3 {
 		d.recheckBandwidth(t0)
-		d.rechecking = false // fixture: the previous recheck finished
+		d.rechecking = false // fixture: the previous recheck ended without a result
 	}
-	if len(d.recheckAt) != 2 || d.recheckAt[old.Addr].IsZero() || d.recheckAt[never.Addr].IsZero() {
-		t.Fatalf("exactly the two due actives must be rechecked, got %v", d.recheckAt)
+	for _, a := range []*IP{old, never} {
+		if !a.SpeedDue.After(t0) {
+			t.Fatalf("%s: a dispatched recheck must push SpeedDue out, got %v", a.Addr, a.SpeedDue)
+		}
+	}
+	if !fresh.SpeedDue.Equal(t0.Add(11 * time.Hour)) {
+		t.Fatal("an active whose SpeedDue is in the future must wait")
 	}
 }
 
-// TestRecheckBelowFloorCutsRelayWeight: a fresh sample under the promotion
-// floor is recorded truthfully and cuts the active's relay weight; a failed
-// download keeps the previous sample.
-func TestRecheckBelowFloorCutsRelayWeight(t *testing.T) {
+// TestBelowFloorNeedsConfirmation: one sample under the promotion floor only
+// schedules a confirmation about an hour later; a second consecutive low
+// sample confirms it and cuts the relay weight. A failed download keeps the
+// latest sample, and a sample at the floor clears the streak.
+func TestBelowFloorNeedsConfirmation(t *testing.T) {
 	d := testDaemon(t)
+	d.cfg.SpeedRecheck = Duration{12 * time.Hour}
 	slow, peer := sinActive("198.18.0.1", 300), sinActive("198.18.1.1", 300)
-	slow.Speed, slow.SpeedAt = 80, t0.Add(-13*time.Hour)
 	d.pool.ips[slow.Addr], d.pool.ips[peer.Addr] = slow, peer
-	d.rechecking = true
-	d.apply(jobResult{job: job{kind: jRecheck, ip: slow.Addr, gen: slow.Gen}, ok: true,
-		speed: SpeedResult{Mbps: 2, Bytes: 2_500_000, Colo: "SIN"}})
-	if d.rechecking || slow.Speed != 2 || !slow.SpeedAt.After(t0) || d.pool.dayBytes != 2_500_000 {
-		t.Fatalf("recheck sample not recorded: speed=%v at=%v bytes=%d", slow.Speed, slow.SpeedAt, d.pool.dayBytes)
+	recheck := func(s SpeedResult) {
+		d.rechecking = true
+		d.apply(jobResult{job: job{kind: jRecheck, ip: slow.Addr, gen: slow.Gen}, ok: s.Err == "", speed: s})
 	}
-	w := map[string]float64{}
-	for _, tg := range d.relaySnap.Load().([]relayTarget) {
-		w[tg.Addr] = tg.Weight
+	weights := func() map[string]float64 {
+		w := map[string]float64{}
+		for _, tg := range d.relaySnap.Load().([]relayTarget) {
+			w[tg.Addr] = tg.Weight
+		}
+		return w
 	}
-	if w[slow.Addr]*4 != w[peer.Addr] {
-		t.Fatalf("a below-floor active must get a quarter of the relay weight, got %v", w)
+
+	recheck(SpeedResult{Mbps: 2, Bytes: 2_500_000, Colo: "SIN"})
+	if d.rechecking || slow.Speed != 2 || slow.belowFloor() || d.pool.dayBytes != 2_500_000 {
+		t.Fatalf("a first low sample must be recorded but not confirmed: speed=%v n=%d bytes=%d",
+			slow.Speed, slow.BelowFloorN, d.pool.dayBytes)
 	}
-	at := slow.SpeedAt
-	d.apply(jobResult{job: job{kind: jRecheck, ip: slow.Addr, gen: slow.Gen},
-		speed: SpeedResult{Err: "status 403"}})
-	if slow.Speed != 2 || !slow.SpeedAt.Equal(at) {
-		t.Fatal("a failed download must not overwrite the latest sample")
+	if until := time.Until(slow.SpeedDue); until > time.Hour || until < 45*time.Minute {
+		t.Fatalf("the confirmation recheck must come about an hour later, got %v", until)
+	}
+	if w := weights(); w[slow.Addr] != w[peer.Addr] {
+		t.Fatalf("an unconfirmed low sample must not cut the relay weight, got %v", w)
+	}
+	recheck(SpeedResult{Err: "status 403"})
+	if slow.Speed != 2 || slow.BelowFloorN != 1 {
+		t.Fatal("a failed download must keep the latest sample")
+	}
+	recheck(SpeedResult{Mbps: 3, Bytes: 3_000_000, Colo: "SIN"})
+	if !slow.belowFloor() {
+		t.Fatal("two consecutive low samples must confirm the active is below the floor")
+	}
+	if w := weights(); w[slow.Addr]*4 != w[peer.Addr] {
+		t.Fatalf("a confirmed below-floor active must get a quarter of the relay weight, got %v", w)
+	}
+	recheck(SpeedResult{Mbps: 60, Bytes: 60_000_000, Colo: "SIN"})
+	if slow.belowFloor() || slow.BelowFloorN != 0 {
+		t.Fatal("a sample at or above the floor must clear the streak")
 	}
 }
 
-// TestLowBandwidthActiveReplacedByQualifiedStandby: a below-floor active keeps
-// serving until a standby passes the full promotion test, then swaps one for
-// one. Each below-floor sample triggers at most one replacement attempt.
+// TestLowBandwidthActiveReplacedByQualifiedStandby: a confirmed below-floor
+// active keeps serving until a standby passes the full promotion test, then
+// swaps one for one. Each below-floor sample triggers at most one attempt.
 func TestLowBandwidthActiveReplacedByQualifiedStandby(t *testing.T) {
 	d, _, sb := pkPairFixture(t)
 	d.ctx = cancelledCtx()
 	low := d.pool.ips["198.18.0.1"]
-	low.Speed, low.SpeedAt = 2, t0
+	low.Speed, low.SpeedAt, low.BelowFloorN = 2, t0, 2
 	sb2 := freshStandby("198.18.4.1", "KIX", 160)
 	d.pool.ips[sb2.Addr] = sb2
 
@@ -87,9 +112,10 @@ func TestLowBandwidthActiveReplacedByQualifiedStandby(t *testing.T) {
 		t.Fatal("one below-floor sample must trigger at most one replacement attempt")
 	}
 
-	low.SpeedAt = t0.Add(12 * time.Hour) // the next recheck is still under the floor
-	sb2.LastSeen = t0.Add(12 * time.Hour)
-	d.replaceLowBandwidth(t0.Add(12 * time.Hour))
+	later := t0.Add(12 * time.Hour)
+	low.SpeedAt, low.BelowFloorN = later, 3 // the next recheck is still under the floor
+	sb2.LastSeen = later
+	d.replaceLowBandwidth(later)
 	if !sb2.Promoting {
 		t.Fatal("a new below-floor sample must allow another replacement attempt")
 	}
@@ -98,5 +124,45 @@ func TestLowBandwidthActiveReplacedByQualifiedStandby(t *testing.T) {
 	if sb2.Role != RoleActive || low.Role != RoleStandby || len(d.pool.actives()) != 3 {
 		t.Fatalf("a qualified replacement must swap one for one: sb2=%s low=%s actives=%d",
 			sb2.Role, low.Role, len(d.pool.actives()))
+	}
+}
+
+// TestStaleReplacementClearsPromoting: a replacement test whose standby left
+// the pool and whose incumbent changed generation is stale, and it must still
+// release the promotion slot.
+func TestStaleReplacementClearsPromoting(t *testing.T) {
+	d, _, sb := pkPairFixture(t)
+	low := d.pool.ips["198.18.0.1"]
+	low.Speed, low.SpeedAt, low.BelowFloorN = 2, t0, 2
+	sb.Promoting, d.promoting = true, true
+	j := job{kind: jPromote, ip: sb.Addr, gen: sb.Gen, peer: low.Addr, peerGen: low.Gen}
+	d.pool.remove(sb.Addr)                      // evicted as the worst standby mid-test
+	d.pool.cooldown(low, "fixture failure", t0) // the incumbent failed mid-test
+	d.apply(jobResult{job: j, ok: true, med: 150, speed: SpeedResult{Mbps: 100}})
+	if d.promoting {
+		t.Fatal("a stale promotion result must release the promotion slot")
+	}
+}
+
+// TestRateLimitPausesDownloads: downloads keep SpeedGap apart, and an HTTP 429
+// from the bandwidth endpoint pauses every download for at least an hour.
+func TestRateLimitPausesDownloads(t *testing.T) {
+	d := testDaemon(t)
+	a := sinActive("198.18.0.1", 300)
+	d.pool.ips[a.Addr] = a
+	d.rechecking = true
+	d.apply(jobResult{job: job{kind: jRecheck, ip: a.Addr, gen: a.Gen}, ok: true,
+		speed: SpeedResult{Mbps: 80, Bytes: 80_000_000, Colo: "SIN", Status: 200}})
+	if until := time.Until(d.pool.speedNext); until > d.cfg.SpeedGap.Duration || until < d.cfg.SpeedGap.Duration-time.Minute {
+		t.Fatalf("the next download must wait SpeedGap, got %v", until)
+	}
+	d.rechecking = true
+	d.apply(jobResult{job: job{kind: jRecheck, ip: a.Addr, gen: a.Gen},
+		speed: SpeedResult{Err: "status 429", Status: 429}})
+	if time.Until(d.pool.speedNext) < 59*time.Minute {
+		t.Fatalf("HTTP 429 must pause downloads for at least an hour, next=%v", d.pool.speedNext)
+	}
+	if d.longJobBlocked(time.Now()) == "" {
+		t.Fatal("long jobs must wait out the pause")
 	}
 }

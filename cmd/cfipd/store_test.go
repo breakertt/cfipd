@@ -208,3 +208,22 @@ func TestV1LoadBoundsAndUntrustedStandbyWindow(t *testing.T) {
 		}
 	}
 }
+
+// TestSpeedNextSurvivesRestart: the earliest next bandwidth download is a
+// scheduling time and must survive a restart.
+func TestSpeedNextSurvivesRestart(t *testing.T) {
+	d := testDaemon(t)
+	next := time.Now().Add(40 * time.Minute)
+	d.pool.speedNext = next
+	if err := d.store.Save(d.pool, d.scan); err != nil {
+		t.Fatal(err)
+	}
+	p := NewPool(d.cfg)
+	scan := NewScanner(d.cfg, func(string) bool { return false }, p.bestActiveMedian)
+	if err := d.store.Load(p, scan); err != nil {
+		t.Fatal(err)
+	}
+	if !p.speedNext.Equal(next) {
+		t.Fatalf("speed_next lost across restart: got %v want %v", p.speedNext, next)
+	}
+}

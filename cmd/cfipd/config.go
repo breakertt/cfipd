@@ -73,6 +73,7 @@ type Config struct {
 	SpeedBytes       int64    `json:"speed_bytes"`
 	SpeedTimeout     Duration `json:"speed_timeout"`
 	SpeedRecheck     Duration `json:"speed_recheck"` // re-measure each active this often; 0 disables
+	SpeedGap         Duration `json:"speed_gap"`     // minimum time between bandwidth downloads
 
 	MaxActivePerPrefix int `json:"max_active_per_prefix24"`
 	MaxActivePerColo   int `json:"max_active_per_colo"`
@@ -131,6 +132,7 @@ func defaultConfig() *Config {
 		SpeedBytes:       99_999_999,
 		SpeedTimeout:     Duration{10 * time.Second},
 		SpeedRecheck:     Duration{12 * time.Hour},
+		SpeedGap:         Duration{15 * time.Minute},
 
 		MaxActivePerPrefix: 1,
 		MaxActivePerColo:   2,

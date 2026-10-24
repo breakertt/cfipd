@@ -125,6 +125,7 @@ like this:
 | `scan_v6_ratio` | Share of new-address discovery assigned to IPv6 | `0.2` |
 | `promote_min_mbps` | Minimum throughput required for promotion | `30` |
 | `speed_recheck` | Interval between bandwidth rechecks of each active; `"0s"` disables them | `"12h"` |
+| `speed_gap` | Minimum time between bandwidth downloads; an HTTP 429 answer pauses downloads for at least an hour | `"15m"` |
 
 The full configuration is defined in
 [config.go](https://github.com/breakertt/cfipd/blob/main/cmd/cfipd/config.go). A direct run
@@ -176,24 +177,33 @@ that still work continue serving until a replacement qualifies.
 
 Fill uses a backup from a different colo when one is available
 (`max_active_per_colo`, default 2). If no such backup can be tried, fill uses a
-backup from the same colo. The limit of one active per /24 always applies.
+backup from the same colo. The limit of one active per /24 always applies. A
+standby that fails a promotion test waits 10 minutes before its next test, then
+20, 40 and so on, up to a day.
 
 With default settings, elective replacement uses a fresh paired comparison (PK):
-both endpoints must pass availability checks, and the challenger must improve median HTTPS probe time
-by at least 20% and 30 ms without worsening p90. A second comparison of the same
+the challenger must pass every availability check and improve median HTTPS probe
+time by at least 20% and 30 ms without worsening p90. A failed incumbent probe
+counts as slower than any success. A second comparison of the same
 pair, at least five minutes later, confirms the result. A bandwidth comparison
 then requires at least 30 Mbps and 80% of the incumbent's measured throughput;
-full bandwidth comparisons are limited to two per day. During a new state's
+full bandwidth comparisons are limited to two per day, and a pair that loses
+the bandwidth comparison is not compared again for a day. During a new state's
 first 24 hours, PK records proposed swaps without applying them. Fault recovery
 still operates, and the observation deadline survives restarts. PK also runs
 when the pool has fewer actives than `active_count` and no backup can fill it.
 
-Each active gets a new bandwidth measurement every 12 hours (`speed_recheck`).
-Only one download runs at a time. An active under 30 Mbps continues to serve,
-with a quarter of its normal relay weight. For each such result, the best
-standby that fits gets one full promotion test. If it passes, the two endpoints
-swap roles. With three actives, rechecks use up to six downloads a day, and
-replacement tests use up to six more.
+Each active gets a new bandwidth measurement about every 12 hours
+(`speed_recheck`), with random jitter. A first result under 30 Mbps starts a
+confirmation measurement about an hour later. After two such results in a row,
+the active continues to serve with a quarter of its normal relay weight. Each
+low result from then on gives the best standby that fits one full promotion
+test. If it passes, the two endpoints swap roles.
+
+Only one download runs at a time, and downloads stay at least 15 minutes apart
+(`speed_gap`) to remain under Cloudflare rate limits. An HTTP 429 answer pauses
+downloads for at least an hour. While at least one active exists, the default
+gap limits bandwidth downloads to 96 a day; with no active, fill does not wait.
 
 The implementation uses TCP passthrough to carry HTTPS. For each new client
 connection, it selects an Active IP with latency-based weights and opens a

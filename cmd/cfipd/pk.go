@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"time"
 )
 
@@ -15,20 +16,22 @@ type pkRun struct {
 	challColo, incColo string
 }
 
-func (r *pkRun) summary() (challMed, incMed, challP90, incP90 float64) {
-	return median(r.challRTT), median(r.incRTT), pct90(r.challRTT), pct90(r.incRTT)
-}
-
 // pass applies the v2 win contract with the same configurable sampling rules
-// as promotion: availability first (PromoteProbes minus PromoteMaxFails good
-// samples each side), then meaningful median improvement (>=20% and >=30ms)
-// with p90 not worse.
+// as promotion: the challenger passes availability first (PromoteProbes minus
+// PromoteMaxFails good samples), then must show a meaningful median
+// improvement (>=20% and >=30ms) with p90 not worse. A failed incumbent probe
+// counts as slower than any success, so a lossy incumbent loses the
+// comparison instead of voiding it.
 func (r *pkRun) pass(cfg *Config) (bool, string) {
 	required := cfg.PromoteProbes - cfg.PromoteMaxFails
-	if r.challOK < required || r.incOK < required {
-		return false, fmt.Sprintf("availability %d/%d ok of %d (need %d)", r.challOK, r.incOK, cfg.PromoteProbes, required)
+	if r.challOK < required {
+		return false, fmt.Sprintf("challenger availability %d/%d ok (need %d)", r.challOK, cfg.PromoteProbes, required)
 	}
-	challMed, incMed, challP90, incP90 := r.summary()
+	inc := append([]float64(nil), r.incRTT...)
+	for range cfg.PromoteProbes - r.incOK {
+		inc = append(inc, math.Inf(1))
+	}
+	challMed, incMed, challP90, incP90 := median(r.challRTT), median(inc), pct90(r.challRTT), pct90(inc)
 	if challMed > incMed-30 || challMed > 0.8*incMed {
 		return false, fmt.Sprintf("median %.0fms vs %.0fms: improvement < 30ms/20%%", challMed, incMed)
 	}
@@ -47,7 +50,7 @@ type pkPending struct {
 // one per 30m; a pending confirmation round follows its own due time. Failed
 // pairs back off instead of retriggering on unchanged evidence.
 func (d *daemon) evalPK(now time.Time) {
-	if d.promoting || d.pkRunning || d.rechecking {
+	if d.longJobBlocked(now) != "" {
 		return
 	}
 	sb, worst := d.nextPKPair(now)
@@ -235,16 +238,25 @@ func (d *daemon) applySpeed(r jobResult, now time.Time) {
 	if sb == nil || inc == nil || sb.Role != RoleStandby || inc.Role != RoleActive {
 		return
 	}
-	win := r.speed.Err == "" && r.speed2.Err == "" &&
+	// Valid samples are recorded whatever the verdict: they are real
+	// measurements of both endpoints.
+	if d.validSpeed(r.speed) {
+		d.pool.recordSpeed(sb, r.speed.Mbps, now)
+	}
+	if d.validSpeed(r.speed2) {
+		d.pool.recordSpeed(inc, r.speed2.Mbps, now)
+	}
+	win := d.validSpeed(r.speed) && d.validSpeed(r.speed2) &&
 		r.speed.Mbps >= d.cfg.PromoteMinMbps && r.speed2.Mbps > 0 &&
 		r.speed.Mbps >= 0.8*r.speed2.Mbps &&
-		(r.speed.Colo == "" || d.cfg.coloAllowed(r.speed.Colo)) &&
-		(r.speed2.Colo == "" || d.cfg.coloAllowed(r.speed2.Colo)) &&
 		d.pool.swapDiverse(sb, inc)
 	d.store.Log(map[string]any{"type": "pk_speed", "challenger": r.ip, "incumbent": r.peer,
 		"chall_mbps": r.speed.Mbps, "inc_mbps": r.speed2.Mbps, "chall_err": r.speed.Err,
 		"inc_err": r.speed2.Err, "win": win, "t": now})
 	if !win {
+		// A bandwidth loss holds for a day; without this backoff the same
+		// low-latency challenger would win every latency round again.
+		d.pkFailUntil[r.ip+">"+r.peer] = now.Add(24 * time.Hour)
 		d.pkLastVerdict = fmt.Sprintf("%s vs %s: bandwidth %.1f vs %.1f Mbps, no swap", r.ip, r.peer, r.speed.Mbps, r.speed2.Mbps)
 		log.Printf("PK %s bandwidth insufficient or inconclusive: %.1fMbps (%s) vs incumbent %.1fMbps (%s)",
 			r.ip, r.speed.Mbps, r.speed.Err, r.speed2.Mbps, r.speed2.Err)
@@ -266,8 +278,6 @@ func (d *daemon) applySpeed(r jobResult, now time.Time) {
 			colo = d.pkLastRun.challColo
 		}
 	}
-	sb.Speed, sb.SpeedAt = r.speed.Mbps, now
-	inc.Speed, inc.SpeedAt = r.speed2.Mbps, now
 	sb.Colo = colo
 	d.pool.swapPK(sb, inc, med, now)
 	d.pkLastVerdict = fmt.Sprintf("%s -> %s swapped (%.1f vs %.1f Mbps)", r.peer, r.ip, r.speed.Mbps, r.speed2.Mbps)

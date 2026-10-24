@@ -360,3 +360,62 @@ func TestRelaxedFillCommitsSameColoActive(t *testing.T) {
 		}
 	}
 }
+
+// TestFillBackoffDoublesPerStandby: a standby that keeps failing its
+// promotion test is retried after 10 minutes, then 20, 40 and so on up to a
+// day, so one bad backup cannot spend a download every 10 minutes.
+func TestFillBackoffDoublesPerStandby(t *testing.T) {
+	d := testDaemon(t)
+	d.ctx = cancelledCtx()
+	for _, a := range []*IP{sinActive("198.18.0.1", 700), sinActive("198.18.1.1", 700)} {
+		d.pool.ips[a.Addr] = a
+	}
+	sb := freshStandby("198.18.2.1", "SIN", 270)
+	d.pool.ips[sb.Addr] = sb
+	attempts := 0
+	for now := t0; now.Before(t0.Add(24 * time.Hour)); now = now.Add(time.Minute) {
+		sb.LastSeen = now
+		if d.fillActive(now) && d.promoting {
+			attempts++
+			d.promoting, sb.Promoting = false, false
+			d.backOffPromotion(sb.Addr, now)
+		}
+	}
+	if attempts != 8 {
+		t.Fatalf("want 8 attempts in a day (at 0, 10, 30, 70, 150, 310, 630, 1270 min), got %d", attempts)
+	}
+}
+
+// TestDownloadsKeepSpeedGap: no long job that may download starts before the
+// gap after the previous download has passed; with no active at all, fill
+// does not wait.
+func TestDownloadsKeepSpeedGap(t *testing.T) {
+	setup := func(actives int) (*daemon, *IP) {
+		d := testDaemon(t)
+		d.ctx = cancelledCtx()
+		for i := range actives {
+			a := sinActive(fmt.Sprintf("198.18.%d.1", i), 700)
+			d.pool.ips[a.Addr] = a
+		}
+		sb := freshStandby("198.18.9.1", "NRT", 270)
+		d.pool.ips[sb.Addr] = sb
+		d.pool.speedNext = t0.Add(5 * time.Minute)
+		return d, sb
+	}
+	d, sb := setup(2)
+	d.schedule(t0)
+	if sb.Promoting || d.pkRunning {
+		t.Fatal("long jobs must wait for the download gap")
+	}
+	later := t0.Add(6 * time.Minute)
+	sb.LastSeen = later
+	d.schedule(later)
+	if !sb.Promoting {
+		t.Fatal("fill must start once the gap has passed")
+	}
+	d, sb = setup(0)
+	d.schedule(t0)
+	if !sb.Promoting {
+		t.Fatal("with no active at all, fill must not wait for the gap")
+	}
+}

@@ -195,8 +195,8 @@ func TestMissingBandwidthReferenceIsNotAWin(t *testing.T) {
 func TestPKRunsWhenFillCannotComplete(t *testing.T) {
 	d, _, sb := pkPairFixture(t)
 	d.ctx = cancelledCtx()
-	d.pool.cooldown(d.pool.ips["198.18.0.1"], "fixture failure", t0) // 2 actives left
-	d.promoteFail[sb.Addr] = t0                                      // the only backup just failed promotion
+	d.pool.cooldown(d.pool.ips["198.18.0.1"], "fixture failure", t0)        // 2 actives left
+	d.promoteFail[sb.Addr] = backoff{until: t0.Add(10 * time.Minute), n: 1} // the only backup just failed promotion
 	d.schedule(t0)
 	if !d.pkRunning || d.promoting {
 		t.Fatal("PK must run when fill cannot complete the pool")
@@ -243,5 +243,58 @@ func TestPKStaleWhenIncumbentChanges(t *testing.T) {
 	d.apply(r)
 	if sb.Role != RoleStandby || inc.Role != RoleActive || d.pkRunning {
 		t.Fatal("a stale incumbent generation must void the swap and clear the PK flag")
+	}
+}
+
+// TestPKBandwidthLossBacksOffAndRecordsSpeed: a challenger that loses the
+// bandwidth stage keeps its measured speed and the pair backs off for a day,
+// so the next elective slot does not spend the daily budget on it again.
+func TestPKBandwidthLossBacksOffAndRecordsSpeed(t *testing.T) {
+	d, inc, sb := pkPairFixture(t)
+	d.ctx = cancelledCtx()
+	d.pool.pk.ObserveUntil = t0.Add(-time.Hour)
+	d.pkRunning = true
+	d.apply(jobResult{job: job{kind: jSpeed, ip: sb.Addr, peer: inc.Addr, gen: sb.Gen, peerGen: inc.Gen}, ok: true,
+		speed: SpeedResult{Mbps: 5, Colo: "KIX"}, speed2: SpeedResult{Mbps: 90, Colo: "HKG"}})
+	if sb.Speed != 5 || inc.Speed != 90 {
+		t.Fatalf("both measured speeds must be recorded, got %v and %v", sb.Speed, inc.Speed)
+	}
+	if until := d.pkFailUntil[sb.Addr+">"+inc.Addr]; time.Until(until) < 23*time.Hour {
+		t.Fatalf("a bandwidth loss must back the pair off for a day, until=%v", until)
+	}
+	d.pool.speedNext = time.Time{} // fixture: the download gap has passed
+	later := t0.Add(31 * time.Minute)
+	sb.LastSeen = later
+	d.pkLastEval = t0
+	d.evalPK(later)
+	if d.pkRunning {
+		t.Fatal("the losing pair must not be compared again at the next elective slot")
+	}
+}
+
+// TestLossyIncumbentLosesPK: a failed incumbent probe counts as slower than
+// any success, so a slow and lossy incumbent loses to a fully available
+// challenger, while a faster incumbent keeps its slot despite one failure.
+func TestLossyIncumbentLosesPK(t *testing.T) {
+	cfg := defaultConfig()
+	pass := func(chall, inc float64, incOK int) bool {
+		r := &pkRun{challOK: 8, incOK: incOK}
+		for range 8 {
+			r.challRTT = append(r.challRTT, chall)
+		}
+		for range incOK {
+			r.incRTT = append(r.incRTT, inc)
+		}
+		ok, _ := r.pass(cfg)
+		return ok
+	}
+	if !pass(270, 723, 7) {
+		t.Fatal("270ms 8/8 must beat a 723ms incumbent with 7/8")
+	}
+	if !pass(270, 723, 0) {
+		t.Fatal("an incumbent without a successful probe must lose")
+	}
+	if pass(250, 200, 7) {
+		t.Fatal("a faster incumbent must keep its slot despite one failure")
 	}
 }

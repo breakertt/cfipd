@@ -174,8 +174,8 @@ func (d *daemon) handleCtl(req ctlRequest) {
 		ip := d.pool.get(req.arg)
 		if ip == nil {
 			rep.err = "unknown ip"
-		} else if d.promoting {
-			rep.err = "a promotion is already running"
+		} else if why := d.longJobBlocked(now); why != "" {
+			rep.err = why
 		} else if ip.Role != RoleStandby {
 			rep.err = "only a standby can be promoted"
 		} else if len(d.pool.actives()) >= d.cfg.ActiveCount {

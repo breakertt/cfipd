@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"net/http"
 	"sync/atomic"
 	"time"
 )
@@ -55,6 +56,13 @@ type jobResult struct {
 	speed2     SpeedResult // jSpeed: incumbent measured in the same window
 }
 
+// backoff delays the next promotion test of a standby that failed n times in
+// a row.
+type backoff struct {
+	until time.Time
+	n     int
+}
+
 type daemon struct {
 	cfg   *Config
 	pool  *Pool
@@ -79,10 +87,9 @@ type daemon struct {
 	pkLastRun     *pkRun               // confirmed round carried into the bandwidth stage
 	pkLastVerdict string
 
-	promoteFail map[string]time.Time // bound mandatory-promotion retries
+	promoteFail map[string]backoff // bound promotion retries per standby
 
 	rechecking bool
-	recheckAt  map[string]time.Time // last bandwidth recheck dispatch per active
 	lowBWTried map[string]time.Time // active -> SpeedAt of the sample whose replacement was tried
 
 	relaySnap   atomic.Value // []relayTarget, written by event loop, read by relay goroutines
@@ -107,8 +114,7 @@ func newDaemon(cfg *Config, store *Store) *daemon {
 		rnd:         rand.New(rand.NewSource(time.Now().UnixNano())),
 		relayStats:  map[string]*RelayStat{},
 		pkFailUntil: map[string]time.Time{},
-		promoteFail: map[string]time.Time{},
-		recheckAt:   map[string]time.Time{},
+		promoteFail: map[string]backoff{},
 		lowBWTried:  map[string]time.Time{},
 		hourCounts:  map[string]int{},
 		hourStart:   time.Now().Truncate(time.Hour),
@@ -349,7 +355,7 @@ func (d *daemon) schedule(now time.Time) {
 	// Hard-failure fill has priority; PK may still improve a pool that fill
 	// cannot complete.
 	filling := false
-	if !d.promoting && !d.pkRunning && !d.rechecking && len(d.pool.actives()) < cfg.ActiveCount {
+	if d.longJobBlocked(now) == "" && len(d.pool.actives()) < cfg.ActiveCount {
 		filling = d.fillActive(now)
 	}
 	if !filling {
@@ -361,6 +367,51 @@ func (d *daemon) schedule(now time.Time) {
 	d.updateRelaySnap()
 }
 
+// longJobBlocked reports why no promotion, PK, recheck or replacement may
+// start now, or "" if one may. One long job runs at a time, so bandwidth
+// downloads never overlap; downloads also keep SpeedGap apart (longer after
+// HTTP 429) to stay under Cloudflare rate limits. With no active at all, the
+// relay cannot serve, so fill does not wait for the gap.
+func (d *daemon) longJobBlocked(now time.Time) string {
+	switch {
+	case d.promoting:
+		return "a promotion test is running"
+	case d.pkRunning:
+		return "a PK comparison is running"
+	case d.rechecking:
+		return "a bandwidth recheck is running"
+	case now.Before(d.pool.speedNext) && len(d.pool.actives()) > 0:
+		return "next bandwidth download allowed at " + d.pool.speedNext.Format(time.RFC3339)
+	}
+	return ""
+}
+
+// noteDownload spaces the next bandwidth download SpeedGap after this one, or
+// at least an hour when Cloudflare answered HTTP 429.
+func (d *daemon) noteDownload(now time.Time, rs ...SpeedResult) {
+	next := now.Add(d.cfg.SpeedGap.Duration)
+	for _, r := range rs {
+		if r.Status == http.StatusTooManyRequests {
+			next = now.Add(max(time.Hour, d.cfg.SpeedGap.Duration))
+			d.logEvent(fmt.Sprintf("bandwidth download rate-limited (HTTP 429); downloads paused until %s",
+				next.Format(time.RFC3339)), now)
+			break
+		}
+	}
+	if next.After(d.pool.speedNext) {
+		d.pool.speedNext = next
+	}
+}
+
+// backOffPromotion doubles a failing standby's retry delay from 10 minutes up
+// to a day, so one bad backup cannot spend a download every few minutes.
+func (d *daemon) backOffPromotion(addr string, now time.Time) {
+	b := d.promoteFail[addr]
+	b.n++
+	b.until = now.Add(min(10*time.Minute<<(b.n-1), 24*time.Hour))
+	d.promoteFail[addr] = b
+}
+
 func sortByNextProbe(ips []*IP) {
 	for i := 1; i < len(ips); i++ {
 		for j := i; j > 0 && ips[j].NextProbe.Before(ips[j-1].NextProbe); j-- {
@@ -369,8 +420,8 @@ func sortByNextProbe(ips []*IP) {
 	}
 }
 
-// fillActive tries standbys best-first; a recently failed promotion backs off
-// instead of re-running a 99MB test every tick. The per-colo cap relaxes only
+// fillActive tries standbys best-first; a failed promotion backs off (see
+// backOffPromotion) instead of re-running a 99MB test every tick. The per-colo cap relaxes only
 // when no backup within it can be tried, so a single reachable colo still
 // fills the pool. It reports whether fill work is in progress.
 func (d *daemon) fillActive(now time.Time) bool {
@@ -391,7 +442,7 @@ func (d *daemon) tryPromote(now time.Time, fits func(*IP) bool, j job) bool {
 		if sb.Promoting {
 			continue
 		}
-		if t, failed := d.promoteFail[sb.Addr]; failed && now.Sub(t) < 10*time.Minute {
+		if now.Before(d.promoteFail[sb.Addr].until) {
 			continue
 		}
 		if !fits(sb) {
@@ -469,9 +520,11 @@ func (d *daemon) apply(r jobResult) {
 	}
 	d.countPhysical(r, now, participant)
 	if stale {
-		if ip != nil && r.job.kind == jPromote {
-			ip.Promoting = false
+		if r.job.kind == jPromote {
 			d.promoting = false
+			if ip != nil {
+				ip.Promoting = false
+			}
 		}
 		if r.job.kind == jPK || r.job.kind == jSpeed {
 			d.pkRunning = false
@@ -543,12 +596,12 @@ func (d *daemon) apply(r jobResult) {
 		case !r.ok:
 			// Bound the retry: back this standby off instead of re-running a
 			// 99MB test every tick; other valid backups are tried meanwhile.
-			d.promoteFail[ip.Addr] = now
+			d.backOffPromotion(ip.Addr, now)
 			d.logEvent(fmt.Sprintf("%s promotion failed: %s", r.ip, r.err), now)
-		case ip.Role == RoleStandby && inc != nil && inc.Role == RoleActive && inc.belowFloor(d.cfg) &&
+		case ip.Role == RoleStandby && inc != nil && inc.Role == RoleActive && inc.belowFloor() &&
 			d.pool.swapDiverse(ip, inc):
 			delete(d.promoteFail, ip.Addr)
-			ip.Speed, ip.SpeedAt = r.speed.Mbps, now
+			d.pool.recordSpeed(ip, r.speed.Mbps, now)
 			d.pool.swapPK(ip, inc, r.med, now)
 			d.logEvent(fmt.Sprintf("%s replaced below-floor active %s (%.1f vs %.1f Mbps)",
 				ip.Addr, inc.Addr, r.speed.Mbps, inc.Speed), now)
@@ -557,7 +610,7 @@ func (d *daemon) apply(r jobResult) {
 		case ip.Role == RoleStandby && inc == nil && len(d.pool.actives()) < d.cfg.ActiveCount &&
 			d.pool.diverseWith(ip, d.pool.actives(), r.relax):
 			delete(d.promoteFail, ip.Addr)
-			ip.Speed, ip.SpeedAt = r.speed.Mbps, now
+			d.pool.recordSpeed(ip, r.speed.Mbps, now)
 			d.pool.promoteActive(ip, r.med, now)
 			d.logEvent(fmt.Sprintf("%s promoted -> active (colo=%s med=%.0fms jit=%.0fms speed=%.1fMbps)",
 				ip.Addr, r.probe.Colo, r.med, r.jit, r.speed.Mbps), now)
@@ -636,6 +689,7 @@ func (d *daemon) countPhysical(r jobResult, now time.Time, ip *IP) {
 		if r.speed.Bytes > 0 || r.speed.Err != "" {
 			d.countProbe(jSpeed, 1)
 			d.pool.dayBytes += r.speed.Bytes
+			d.noteDownload(now, r.speed)
 		}
 	case jPK:
 		var inc *IP
@@ -647,10 +701,12 @@ func (d *daemon) countPhysical(r jobResult, now time.Time, ip *IP) {
 	case jSpeed:
 		d.countProbe(jSpeed, 2)
 		d.pool.dayBytes += r.speed.Bytes + r.speed2.Bytes
+		d.noteDownload(now, r.speed, r.speed2)
 	case jRecheck:
 		if r.speed.Bytes > 0 || r.speed.Err != "" {
 			d.countProbe(jSpeed, 1)
 			d.pool.dayBytes += r.speed.Bytes
+			d.noteDownload(now, r.speed)
 		}
 	}
 }
