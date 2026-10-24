@@ -419,3 +419,44 @@ func TestDownloadsKeepSpeedGap(t *testing.T) {
 		t.Fatal("with no active at all, fill must not wait for the gap")
 	}
 }
+
+// TestPromotionBackoffCapsAtADay: the doubling backoff stays in the future and
+// never exceeds a day, however long a standby keeps failing.
+func TestPromotionBackoffCapsAtADay(t *testing.T) {
+	d := testDaemon(t)
+	now := t0
+	for i := range 80 {
+		d.backOffPromotion("198.18.2.1", now)
+		b := d.promoteFail["198.18.2.1"]
+		if wait := b.until.Sub(now); wait <= 0 || wait > 24*time.Hour {
+			t.Fatalf("failure %d: backoff %v, want (0, 24h]", i+1, wait)
+		}
+		now = b.until
+	}
+}
+
+// TestRateLimitPauseHoldsWithoutActives: the HTTP 429 pause applies even with
+// no active (only the gap is waived then), and a 429 does not count against
+// the standby whose test hit it.
+func TestRateLimitPauseHoldsWithoutActives(t *testing.T) {
+	d := testDaemon(t)
+	d.ctx = cancelledCtx()
+	sb := freshStandby("198.18.9.1", "NRT", 270)
+	d.pool.ips[sb.Addr] = sb
+	d.noteDownload(t0, SpeedResult{Err: "status 429", Status: 429})
+	d.schedule(t0.Add(time.Minute))
+	if sb.Promoting {
+		t.Fatal("no test may start during the HTTP 429 pause, even with no active")
+	}
+	later := t0.Add(2 * time.Hour)
+	sb.LastSeen = later
+	d.schedule(later)
+	if !sb.Promoting {
+		t.Fatal("fill must resume once the pause ends")
+	}
+	d.apply(jobResult{job: job{kind: jPromote, ip: sb.Addr, gen: sb.Gen}, err: "speed 0.0Mbps < 30.0Mbps (status 429)",
+		speed: SpeedResult{Err: "status 429", Status: 429}})
+	if _, backedOff := d.promoteFail[sb.Addr]; backedOff {
+		t.Fatal("an endpoint-side 429 must not back the standby off")
+	}
+}

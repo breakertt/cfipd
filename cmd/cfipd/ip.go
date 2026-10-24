@@ -153,7 +153,8 @@ type Pool struct {
 	rnd *rand.Rand
 	pk  *pkPersist
 
-	speedNext time.Time // earliest next bandwidth download (SpeedGap, HTTP 429 pause)
+	speedNext   time.Time // earliest next bandwidth download (SpeedGap); waived with no active
+	speedPaused time.Time // HTTP 429 pause; holds even with no active
 
 	day       string         // UTC day of dayCounts/dayBytes
 	dayCounts map[string]int // physical probes per kind today
@@ -571,9 +572,9 @@ func (p *Pool) demoteToStandby(ip *IP, now time.Time) {
 }
 
 // recordSpeed stores a valid bandwidth sample, counts consecutive samples
-// under the promotion floor and schedules the next recheck: about an hour
-// after a first low sample to confirm it, else SpeedRecheck; both jittered so
-// rechecks do not lock to fixed times of day.
+// under the promotion floor and schedules the next recheck (see recheckAfter):
+// about an hour after a first low sample to confirm it, else SpeedRecheck; both
+// jittered so rechecks do not lock to fixed times of day.
 func (p *Pool) recordSpeed(ip *IP, mbps float64, now time.Time) {
 	ip.Speed, ip.SpeedAt = mbps, now
 	if mbps < p.cfg.PromoteMinMbps {
@@ -581,11 +582,16 @@ func (p *Pool) recordSpeed(ip *IP, mbps float64, now time.Time) {
 	} else {
 		ip.BelowFloorN = 0
 	}
+	ip.SpeedDue = p.recheckAfter(ip, now)
+}
+
+// recheckAfter is when an active's next bandwidth recheck is due after now.
+func (p *Pool) recheckAfter(ip *IP, now time.Time) time.Time {
 	every := p.cfg.SpeedRecheck.Duration
 	if ip.BelowFloorN == 1 {
 		every = time.Hour
 	}
-	ip.SpeedDue = now.Add(p.jitterDown(every))
+	return now.Add(p.jitterDown(every))
 }
 
 // swapPK atomically replaces incumbent active with challenger standby.

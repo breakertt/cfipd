@@ -369,9 +369,9 @@ func (d *daemon) schedule(now time.Time) {
 
 // longJobBlocked reports why no promotion, PK, recheck or replacement may
 // start now, or "" if one may. One long job runs at a time, so bandwidth
-// downloads never overlap; downloads also keep SpeedGap apart (longer after
-// HTTP 429) to stay under Cloudflare rate limits. With no active at all, the
-// relay cannot serve, so fill does not wait for the gap.
+// downloads never overlap; tests also start SpeedGap apart and pause after
+// HTTP 429 to stay under Cloudflare rate limits. With no active at all, the
+// relay cannot serve, so fill does not wait for the gap; the 429 pause holds.
 func (d *daemon) longJobBlocked(now time.Time) string {
 	switch {
 	case d.promoting:
@@ -380,26 +380,27 @@ func (d *daemon) longJobBlocked(now time.Time) string {
 		return "a PK comparison is running"
 	case d.rechecking:
 		return "a bandwidth recheck is running"
+	case now.Before(d.pool.speedPaused):
+		return "bandwidth downloads paused after HTTP 429 until " + d.pool.speedPaused.Format(time.RFC3339)
 	case now.Before(d.pool.speedNext) && len(d.pool.actives()) > 0:
 		return "next bandwidth download allowed at " + d.pool.speedNext.Format(time.RFC3339)
 	}
 	return ""
 }
 
-// noteDownload spaces the next bandwidth download SpeedGap after this one, or
-// at least an hour when Cloudflare answered HTTP 429.
+// noteDownload spaces the next bandwidth test SpeedGap after this download,
+// and pauses all tests for at least an hour when Cloudflare answered HTTP 429.
 func (d *daemon) noteDownload(now time.Time, rs ...SpeedResult) {
-	next := now.Add(d.cfg.SpeedGap.Duration)
+	if next := now.Add(d.cfg.SpeedGap.Duration); next.After(d.pool.speedNext) {
+		d.pool.speedNext = next
+	}
 	for _, r := range rs {
 		if r.Status == http.StatusTooManyRequests {
-			next = now.Add(max(time.Hour, d.cfg.SpeedGap.Duration))
-			d.logEvent(fmt.Sprintf("bandwidth download rate-limited (HTTP 429); downloads paused until %s",
-				next.Format(time.RFC3339)), now)
-			break
+			d.pool.speedPaused = now.Add(max(time.Hour, d.cfg.SpeedGap.Duration))
+			d.logEvent(fmt.Sprintf("bandwidth download rate-limited (HTTP 429); tests paused until %s",
+				d.pool.speedPaused.Format(time.RFC3339)), now)
+			return
 		}
-	}
-	if next.After(d.pool.speedNext) {
-		d.pool.speedNext = next
 	}
 }
 
@@ -408,7 +409,7 @@ func (d *daemon) noteDownload(now time.Time, rs ...SpeedResult) {
 func (d *daemon) backOffPromotion(addr string, now time.Time) {
 	b := d.promoteFail[addr]
 	b.n++
-	b.until = now.Add(min(10*time.Minute<<(b.n-1), 24*time.Hour))
+	b.until = now.Add(min(10*time.Minute<<min(b.n-1, 8), 24*time.Hour)) // 10m<<8 > 24h; no overflow
 	d.promoteFail[addr] = b
 }
 
@@ -596,7 +597,11 @@ func (d *daemon) apply(r jobResult) {
 		case !r.ok:
 			// Bound the retry: back this standby off instead of re-running a
 			// 99MB test every tick; other valid backups are tried meanwhile.
-			d.backOffPromotion(ip.Addr, now)
+			// A 429 is the endpoint's limit, not the standby's; the pause in
+			// noteDownload covers it.
+			if r.speed.Status != http.StatusTooManyRequests {
+				d.backOffPromotion(ip.Addr, now)
+			}
 			d.logEvent(fmt.Sprintf("%s promotion failed: %s", r.ip, r.err), now)
 		case ip.Role == RoleStandby && inc != nil && inc.Role == RoleActive && inc.belowFloor() &&
 			d.pool.swapDiverse(ip, inc):

@@ -18,7 +18,7 @@ func (d *daemon) recheckBandwidth(now time.Time) {
 		if now.Before(a.SpeedDue) {
 			continue
 		}
-		a.SpeedDue = now.Add(d.cfg.SpeedRecheck.Duration) // a failed download waits a full interval
+		a.SpeedDue = d.pool.recheckAfter(a, now) // a failed download retries on the same schedule
 		d.rechecking = true
 		j := job{kind: jRecheck, ip: a.Addr, gen: a.Gen}
 		log.Printf("bandwidth recheck: %s (last %.1fMbps)", a.Addr, a.Speed)

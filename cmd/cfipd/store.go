@@ -34,14 +34,15 @@ type pkPersist struct {
 }
 
 type snapshot struct {
-	SavedAt   time.Time              `json:"saved_at"`
-	IPs       map[string]*IP         `json:"ips"`
-	Prefixes  map[string]*PrefixStat `json:"prefixes"`
-	PK        *pkPersist             `json:"pk,omitempty"`
-	Day       string                 `json:"day,omitempty"`
-	DayCounts map[string]int         `json:"day_counts,omitempty"`
-	DayBytes  int64                  `json:"day_bytes,omitempty"`
-	SpeedNext time.Time              `json:"speed_next,omitempty"`
+	SavedAt     time.Time              `json:"saved_at"`
+	IPs         map[string]*IP         `json:"ips"`
+	Prefixes    map[string]*PrefixStat `json:"prefixes"`
+	PK          *pkPersist             `json:"pk,omitempty"`
+	Day         string                 `json:"day,omitempty"`
+	DayCounts   map[string]int         `json:"day_counts,omitempty"`
+	DayBytes    int64                  `json:"day_bytes,omitempty"`
+	SpeedNext   time.Time              `json:"speed_next,omitempty"`
+	SpeedPaused time.Time              `json:"speed_paused,omitempty"`
 }
 
 func OpenStore(dir string) (*Store, error) {
@@ -164,7 +165,7 @@ func (s *Store) Load(pool *Pool, scan *Scanner) error {
 		log.Printf("PK observe-only until %s", snap.PK.ObserveUntil.Format(time.RFC3339))
 	}
 	pool.pk = snap.PK
-	pool.speedNext = snap.SpeedNext
+	pool.speedNext, pool.speedPaused = snap.SpeedNext, snap.SpeedPaused
 	if snap.Day == now.Format("2006-01-02") {
 		pool.day, pool.dayBytes = snap.Day, snap.DayBytes
 		if snap.DayCounts != nil {
@@ -232,7 +233,8 @@ func synthesizedWin(win []Obs) bool {
 
 func (s *Store) Save(pool *Pool, scan *Scanner) error {
 	snap := snapshot{SavedAt: time.Now(), IPs: pool.ips, Prefixes: scan.stats, PK: pool.pk,
-		Day: pool.day, DayCounts: pool.dayCounts, DayBytes: pool.dayBytes, SpeedNext: pool.speedNext}
+		Day: pool.day, DayCounts: pool.dayCounts, DayBytes: pool.dayBytes,
+		SpeedNext: pool.speedNext, SpeedPaused: pool.speedPaused}
 	b, err := json.Marshal(snap)
 	if err != nil {
 		return err

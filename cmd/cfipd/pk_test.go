@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -296,5 +297,33 @@ func TestLossyIncumbentLosesPK(t *testing.T) {
 	}
 	if pass(250, 200, 7) {
 		t.Fatal("a faster incumbent must keep its slot despite one failure")
+	}
+}
+
+// TestInconclusiveBandwidthStageBacksOffBriefly: a failed download makes the
+// bandwidth stage inconclusive, which holds the pair for an hour, not a day.
+func TestInconclusiveBandwidthStageBacksOffBriefly(t *testing.T) {
+	d, inc, sb := pkPairFixture(t)
+	d.pool.pk.ObserveUntil = t0.Add(-time.Hour)
+	d.applySpeed(jobResult{job: job{kind: jSpeed, ip: sb.Addr, peer: inc.Addr}, ok: true,
+		speed: SpeedResult{Mbps: 100, Colo: "KIX"}, speed2: SpeedResult{Err: "status 429", Status: 429}}, t0)
+	if wait := d.pkFailUntil[sb.Addr+">"+inc.Addr].Sub(t0); wait <= 0 || wait > time.Hour {
+		t.Fatalf("an inconclusive bandwidth stage must hold the pair for at most an hour, got %v", wait)
+	}
+}
+
+// TestPKVerdictShowsIncumbentFailures: the verdict names failed incumbent
+// probes instead of printing an infinite latency.
+func TestPKVerdictShowsIncumbentFailures(t *testing.T) {
+	r := &pkRun{challOK: 8, incOK: 3}
+	for range 8 {
+		r.challRTT = append(r.challRTT, 270)
+	}
+	for range 3 {
+		r.incRTT = append(r.incRTT, 723)
+	}
+	ok, why := r.pass(defaultConfig())
+	if !ok || strings.Contains(why, "Inf") || !strings.Contains(why, "3/8") {
+		t.Fatalf("ok=%v why=%q", ok, why)
 	}
 }

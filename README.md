@@ -195,11 +195,13 @@ standby that fails a promotion test waits 10 minutes before its next test, then
 With default settings, elective replacement uses a fresh paired comparison (PK):
 the challenger must pass every availability check and improve median HTTPS probe
 time by at least 20% and 30 ms without worsening p90. A failed incumbent probe
-counts as slower than any success. A second comparison of the same
+counts as slower than any success, so an incumbent that fails half of its probes
+loses on availability alone. A second comparison of the same
 pair, at least five minutes later, confirms the result. A bandwidth comparison
 then requires at least 30 Mbps and 80% of the incumbent's measured throughput;
-full bandwidth comparisons are limited to two per day, and a pair that loses
-the bandwidth comparison is not compared again for a day. During a new state's
+full bandwidth comparisons are limited to two per day. A pair that loses the
+bandwidth comparison is not compared again for a day; if a download fails, the
+pair waits an hour. During a new state's
 first 24 hours, PK records proposed swaps without applying them. Fault recovery
 still operates, and the observation deadline survives restarts. PK also runs
 when the pool has fewer actives than `active_count` and no backup can fill it.
@@ -211,10 +213,12 @@ the active continues to serve with a quarter of its normal relay weight. Each
 low result from then on gives the best standby that fits one full promotion
 test. If it passes, the two endpoints swap roles.
 
-Only one download runs at a time, and downloads stay at least 15 minutes apart
-(`speed_gap`) to remain under Cloudflare rate limits. An HTTP 429 answer pauses
-downloads for at least an hour. While at least one active exists, the default
-gap limits bandwidth downloads to 96 a day; with no active, fill does not wait.
+Bandwidth tests run one at a time and start at least 15 minutes apart
+(`speed_gap`) to stay under Cloudflare rate limits. A PK test downloads twice in
+a row, once for each endpoint. An HTTP 429 answer pauses all tests for at least
+an hour and does not count against the standby. While at least one active
+exists, the default gap allows at most 96 tests a day. With no active at all,
+fill does not wait for the gap, but the 429 pause still applies.
 
 The implementation uses TCP passthrough to carry HTTPS. For each new client
 connection, it selects an Active IP with latency-based weights and opens a

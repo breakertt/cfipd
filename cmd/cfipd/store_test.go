@@ -209,12 +209,12 @@ func TestV1LoadBoundsAndUntrustedStandbyWindow(t *testing.T) {
 	}
 }
 
-// TestSpeedNextSurvivesRestart: the earliest next bandwidth download is a
-// scheduling time and must survive a restart.
+// TestSpeedNextSurvivesRestart: the download gap and the HTTP 429 pause are
+// scheduling times and must survive a restart.
 func TestSpeedNextSurvivesRestart(t *testing.T) {
 	d := testDaemon(t)
-	next := time.Now().Add(40 * time.Minute)
-	d.pool.speedNext = next
+	next, paused := time.Now().Add(40*time.Minute), time.Now().Add(70*time.Minute)
+	d.pool.speedNext, d.pool.speedPaused = next, paused
 	if err := d.store.Save(d.pool, d.scan); err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestSpeedNextSurvivesRestart(t *testing.T) {
 	if err := d.store.Load(p, scan); err != nil {
 		t.Fatal(err)
 	}
-	if !p.speedNext.Equal(next) {
-		t.Fatalf("speed_next lost across restart: got %v want %v", p.speedNext, next)
+	if !p.speedNext.Equal(next) || !p.speedPaused.Equal(paused) {
+		t.Fatalf("download schedule lost across restart: got %v/%v want %v/%v", p.speedNext, p.speedPaused, next, paused)
 	}
 }

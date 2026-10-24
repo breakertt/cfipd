@@ -21,7 +21,9 @@ type pkRun struct {
 // PromoteMaxFails good samples), then must show a meaningful median
 // improvement (>=20% and >=30ms) with p90 not worse. A failed incumbent probe
 // counts as slower than any success, so a lossy incumbent loses the
-// comparison instead of voiding it.
+// comparison instead of voiding it; with half or more failed, availability
+// alone decides. pkPairEligible has already required the challenger's window
+// median to beat the incumbent's, so this cannot crown a slow challenger.
 func (r *pkRun) pass(cfg *Config) (bool, string) {
 	required := cfg.PromoteProbes - cfg.PromoteMaxFails
 	if r.challOK < required {
@@ -32,13 +34,20 @@ func (r *pkRun) pass(cfg *Config) (bool, string) {
 		inc = append(inc, math.Inf(1))
 	}
 	challMed, incMed, challP90, incP90 := median(r.challRTT), median(inc), pct90(r.challRTT), pct90(inc)
+	show := func(v float64) string {
+		if math.IsInf(v, 1) {
+			return "failed"
+		}
+		return fmt.Sprintf("%.0fms", v)
+	}
 	if challMed > incMed-30 || challMed > 0.8*incMed {
-		return false, fmt.Sprintf("median %.0fms vs %.0fms: improvement < 30ms/20%%", challMed, incMed)
+		return false, fmt.Sprintf("median %.0fms vs %s: improvement < 30ms/20%%", challMed, show(incMed))
 	}
 	if challP90 > incP90 {
-		return false, fmt.Sprintf("p90 %.0fms > incumbent %.0fms", challP90, incP90)
+		return false, fmt.Sprintf("p90 %.0fms > incumbent %s", challP90, show(incP90))
 	}
-	return true, fmt.Sprintf("median %.0fms -> %.0fms, p90 %.0fms -> %.0fms", incMed, challMed, incP90, challP90)
+	return true, fmt.Sprintf("median %s -> %.0fms, p90 %s -> %.0fms, incumbent %d/%d ok",
+		show(incMed), challMed, show(incP90), challP90, r.incOK, cfg.PromoteProbes)
 }
 
 type pkPending struct {
@@ -218,6 +227,8 @@ func (d *daemon) applyPK(r jobResult, now time.Time) {
 	d.pool.pk.BWUsed++
 	d.pkRunning = true
 	d.pkLastRun = r.pk // fresh paired evidence carries into the bandwidth stage
+	// No longJobBlocked check here: evalPK passed it when this PK started, and
+	// pkRunning has blocked every other long job and download since then.
 	j := job{kind: jSpeed, ip: r.ip, peer: r.peer, gen: sb.Gen, peerGen: inc.Gen}
 	log.Printf("PK %s confirmed (%s), bandwidth check (%d/2 today)", r.ip, why, d.pool.pk.BWUsed)
 	go func() { d.sendResult(d.execSpeed(d.ctx, j)) }()
@@ -254,9 +265,14 @@ func (d *daemon) applySpeed(r jobResult, now time.Time) {
 		"chall_mbps": r.speed.Mbps, "inc_mbps": r.speed2.Mbps, "chall_err": r.speed.Err,
 		"inc_err": r.speed2.Err, "win": win, "t": now})
 	if !win {
-		// A bandwidth loss holds for a day; without this backoff the same
-		// low-latency challenger would win every latency round again.
-		d.pkFailUntil[r.ip+">"+r.peer] = now.Add(24 * time.Hour)
+		// A real bandwidth loss holds for a day; without it the same
+		// low-latency challenger would win every latency round again. An
+		// inconclusive stage (a failed download) holds only for an hour.
+		hold := time.Hour
+		if d.validSpeed(r.speed) && d.validSpeed(r.speed2) {
+			hold = 24 * time.Hour
+		}
+		d.pkFailUntil[r.ip+">"+r.peer] = now.Add(hold)
 		d.pkLastVerdict = fmt.Sprintf("%s vs %s: bandwidth %.1f vs %.1f Mbps, no swap", r.ip, r.peer, r.speed.Mbps, r.speed2.Mbps)
 		log.Printf("PK %s bandwidth insufficient or inconclusive: %.1fMbps (%s) vs incumbent %.1fMbps (%s)",
 			r.ip, r.speed.Mbps, r.speed.Err, r.speed2.Mbps, r.speed2.Err)

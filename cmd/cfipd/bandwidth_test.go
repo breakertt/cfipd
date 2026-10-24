@@ -159,10 +159,25 @@ func TestRateLimitPausesDownloads(t *testing.T) {
 	d.rechecking = true
 	d.apply(jobResult{job: job{kind: jRecheck, ip: a.Addr, gen: a.Gen},
 		speed: SpeedResult{Err: "status 429", Status: 429}})
-	if time.Until(d.pool.speedNext) < 59*time.Minute {
-		t.Fatalf("HTTP 429 must pause downloads for at least an hour, next=%v", d.pool.speedNext)
+	if time.Until(d.pool.speedPaused) < 59*time.Minute {
+		t.Fatalf("HTTP 429 must pause downloads for at least an hour, paused until %v", d.pool.speedPaused)
 	}
 	if d.longJobBlocked(time.Now()) == "" {
 		t.Fatal("long jobs must wait out the pause")
+	}
+}
+
+// TestFailedConfirmationRetriesWithinTheHour: when the confirmation download
+// of a first low sample fails, the retry keeps the confirmation schedule.
+func TestFailedConfirmationRetriesWithinTheHour(t *testing.T) {
+	d := testDaemon(t)
+	d.ctx = cancelledCtx()
+	d.cfg.SpeedRecheck = Duration{12 * time.Hour}
+	a := sinActive("198.18.0.1", 300)
+	a.Speed, a.SpeedAt, a.BelowFloorN, a.SpeedDue = 2, t0.Add(-time.Hour), 1, t0
+	d.pool.ips[a.Addr] = a
+	d.recheckBandwidth(t0)
+	if wait := a.SpeedDue.Sub(t0); !d.rechecking || wait <= 0 || wait > time.Hour {
+		t.Fatalf("a pending confirmation must retry within the hour, got %v", wait)
 	}
 }
