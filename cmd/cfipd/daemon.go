@@ -92,12 +92,16 @@ type daemon struct {
 	rechecking bool
 	lowBWTried map[string]time.Time // active -> SpeedAt of the sample whose replacement was tried
 
-	relaySnap   atomic.Value // []relayTarget, written by event loop, read by relay goroutines
-	relayStats  map[string]*RelayStat
-	clients     clientTable
-	conns       connLog
-	ctx         context.Context
-	discovering int
+	relaySnap  atomic.Value // []relayTarget, written by event loop, read by relay goroutines
+	relayStats map[string]*RelayStat
+	clients    clientTable
+	conns      connLog
+	// halfCloseIdle ends a half-closed relay connection whose remaining
+	// direction stays quiet this long.
+	halfCloseIdle time.Duration
+	lowMem        bool // the host is short of memory; see lowMemory
+	ctx           context.Context
+	discovering   int
 
 	hourStart  time.Time
 	hourCounts map[string]int
@@ -106,20 +110,21 @@ type daemon struct {
 
 func newDaemon(cfg *Config, store *Store) *daemon {
 	d := &daemon{
-		cfg:         cfg,
-		store:       store,
-		jobs:        make(chan job, 64),
-		results:     make(chan jobResult, 64),
-		inflight:    map[string]bool{},
-		ctl:         make(chan ctlRequest),
-		started:     time.Now(),
-		rnd:         rand.New(rand.NewSource(time.Now().UnixNano())),
-		relayStats:  map[string]*RelayStat{},
-		pkFailUntil: map[string]time.Time{},
-		promoteFail: map[string]backoff{},
-		lowBWTried:  map[string]time.Time{},
-		hourCounts:  map[string]int{},
-		hourStart:   time.Now().Truncate(time.Hour),
+		cfg:           cfg,
+		store:         store,
+		jobs:          make(chan job, 64),
+		results:       make(chan jobResult, 64),
+		inflight:      map[string]bool{},
+		ctl:           make(chan ctlRequest),
+		started:       time.Now(),
+		rnd:           rand.New(rand.NewSource(time.Now().UnixNano())),
+		relayStats:    map[string]*RelayStat{},
+		halfCloseIdle: time.Minute,
+		pkFailUntil:   map[string]time.Time{},
+		promoteFail:   map[string]backoff{},
+		lowBWTried:    map[string]time.Time{},
+		hourCounts:    map[string]int{},
+		hourStart:     time.Now().Truncate(time.Hour),
 	}
 	d.pool = NewPool(cfg)
 	// Default before Load: a fresh install also observes PK for a day.
@@ -148,8 +153,10 @@ func (d *daemon) run(ctx context.Context) error {
 	defer snap.Stop()
 	mem := time.NewTicker(time.Minute)
 	defer mem.Stop()
+	limitMB, low := tuneMemory(d.cfg)
+	d.lowMem = low
 	log.Printf("cfipd started, data=%s socket=%s memory_limit=%dMiB (0 = none)",
-		d.cfg.DataDir, d.cfg.Socket, tuneMemory(d.cfg))
+		d.cfg.DataDir, d.cfg.Socket, limitMB)
 	for {
 		select {
 		case <-ctx.Done():
@@ -164,10 +171,12 @@ func (d *daemon) run(ctx context.Context) error {
 		case req := <-d.ctl:
 			d.handleCtl(req)
 		case <-mem.C:
-			tuneMemory(d.cfg)
+			if _, d.lowMem = tuneMemory(d.cfg); d.lowMem {
+				d.shedMemory(time.Now())
+			}
 		case <-snap.C:
-			d.pool.pruneCandidates(time.Now())
-			d.scan.prune(time.Now())
+			d.pool.pruneCandidates(time.Now(), d.candidateCap())
+			d.scan.prune(time.Now(), d.lowMem)
 			if err := d.store.Save(d.pool, d.scan); err != nil {
 				log.Printf("save: %v", err)
 			}
@@ -740,7 +749,7 @@ func (d *daemon) countProbe(k jobKind, n int) {
 // admission time.
 func (d *daemon) candidateRoom(addr string) bool {
 	cands := d.pool.candidates()
-	if len(cands) >= d.cfg.CandidateCap {
+	if len(cands) >= d.candidateCap() {
 		return false
 	}
 	key, n := BlockKey(addr), 0

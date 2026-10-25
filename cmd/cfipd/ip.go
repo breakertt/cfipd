@@ -656,7 +656,7 @@ func (p *Pool) swapDiverse(sb, inc *IP) bool {
 // pruneCandidates expires stale candidates and enforces the cap. Nodes in
 // cooldown are kept so a failed active cannot be pruned and immediately
 // rediscovered past its rest.
-func (p *Pool) pruneCandidates(now time.Time) {
+func (p *Pool) pruneCandidates(now time.Time, limit int) {
 	for _, c := range p.candidates() {
 		if c.CooldownUntil.After(now) {
 			continue
@@ -670,7 +670,7 @@ func (p *Pool) pruneCandidates(now time.Time) {
 		}
 	}
 	cands := p.candidates()
-	if len(cands) <= p.cfg.CandidateCap {
+	if len(cands) <= limit {
 		return
 	}
 	sort.Slice(cands, func(i, j int) bool {
@@ -685,7 +685,7 @@ func (p *Pool) pruneCandidates(now time.Time) {
 		}
 		return a.LastSeen.Before(b.LastSeen)
 	})
-	for _, ip := range cands[:len(cands)-p.cfg.CandidateCap] {
+	for _, ip := range cands[:len(cands)-limit] {
 		if ip.CooldownUntil.After(now) {
 			continue
 		}

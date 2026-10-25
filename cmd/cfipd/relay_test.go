@@ -264,6 +264,11 @@ func TestCopyCountedUsesPooledBuffer(t *testing.T) {
 // relayVia starts a relay for d in front of an echo upstream on 127.0.0.1 and
 // returns the relay address. With active false, the pool has no active.
 func relayVia(t *testing.T, d *daemon, active bool) string {
+	return relayTo(t, d, active, func(c net.Conn) { io.Copy(c, c); c.Close() })
+}
+
+// relayTo is relayVia with an upstream that serves each connection with serve.
+func relayTo(t *testing.T, d *daemon, active bool, serve func(net.Conn)) string {
 	t.Helper()
 	up, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -276,7 +281,7 @@ func relayVia(t *testing.T, d *daemon, active bool) string {
 			if err != nil {
 				return
 			}
-			go io.Copy(c, c)
+			go serve(c)
 		}
 	}()
 	_, port, _ := net.SplitHostPort(up.Addr().String())
@@ -514,5 +519,59 @@ func TestRelayListsSNI(t *testing.T) {
 			t.Fatalf("connections: %+v", d.conns.list())
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A client that half-closes after its request still gets the whole reply, also
+// when the upstream answers only after it reads the end of the request.
+func TestRelayKeepsReplyAfterClientHalfClose(t *testing.T) {
+	d := testDaemon(t)
+	addr := relayTo(t, d, true, func(c net.Conn) {
+		defer c.Close()
+		io.Copy(io.Discard, c)
+		time.Sleep(300 * time.Millisecond)
+		c.Write([]byte("reply"))
+	})
+	cli, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+	cli.SetDeadline(time.Now().Add(3 * time.Second))
+	cli.Write([]byte("request"))
+	cli.(*net.TCPConn).CloseWrite()
+	if b, err := io.ReadAll(cli); string(b) != "reply" {
+		t.Fatalf("got %q, %v; want the reply after the half-close", b, err)
+	}
+}
+
+// A half-closed connection whose upstream neither answers nor closes ends once
+// the remaining direction has been quiet for halfCloseIdle.
+func TestRelayEndsQuietHalfClosedConnection(t *testing.T) {
+	d := testDaemon(t)
+	d.halfCloseIdle = 200 * time.Millisecond
+	quit := make(chan struct{})
+	defer close(quit)
+	addr := relayTo(t, d, true, func(c net.Conn) {
+		defer c.Close()
+		io.Copy(io.Discard, c)
+		<-quit // read the end of the request, then hold the connection silently
+	})
+	cli, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+	cli.Write([]byte("request"))
+	cli.(*net.TCPConn).CloseWrite()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if cs := d.conns.list(); len(cs) == 1 && cs[0].End != "" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("a quiet half-closed connection must end: %+v", d.conns.list())
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

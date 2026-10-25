@@ -81,7 +81,7 @@ func TestPruneDropsOnlyUnusableV6Stats(t *testing.T) {
 	s.stats["2a06:98c1:3101::"] = &PrefixStat{Prefix: "2a06:98c1:3101::", Probes: 2, OK: 2, LastProbe: t0.Add(-8 * 24 * time.Hour)}
 	s.stats["2a06:98c1:3102::"] = &PrefixStat{Prefix: "2a06:98c1:3102::", Probes: 2, OK: 2, LastProbe: t0.Add(-6 * 24 * time.Hour)}
 	s.stats["198.18.0"] = &PrefixStat{Prefix: "198.18.0", Probes: 1, LastProbe: t0.Add(-400 * 24 * time.Hour)}
-	s.prune(t0)
+	s.prune(t0, false)
 	if _, ok := s.stats["2a06:98c1:3101::"]; ok {
 		t.Fatal("a v6 statistic stale for 8 days must be dropped")
 	}

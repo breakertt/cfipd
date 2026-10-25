@@ -161,7 +161,7 @@ func TestCooldownSurvivesPrune(t *testing.T) {
 		d.pool.ips[fmt.Sprintf("9.9.8.%d", i+1)] = &IP{Addr: fmt.Sprintf("9.9.8.%d", i+1),
 			Role: RoleCandidate, FirstSeen: t0, LastSeen: t0}
 	}
-	d.pool.pruneCandidates(t0)
+	d.pool.pruneCandidates(t0, d.cfg.CandidateCap)
 	if d.pool.get(cool.Addr) == nil {
 		t.Fatal("cooldown candidate must survive pruning (else a failed active could be rediscovered past its rest)")
 	}

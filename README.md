@@ -259,7 +259,9 @@ and Cloudflare. For the connection list, cfipd reads the server name (SNI) from 
 plaintext TLS ClientHello as it passes; with Encrypted Client Hello (ECH), this is
 the public outer name. Requests that reuse the same HTTPS connection keep the same
 upstream; selection happens per connection, not per HTTP request. Swaps affect
-new HTTPS connections; established sessions keep their existing upstream.
+new HTTPS connections; established sessions keep their existing upstream. When
+one side half-closes a connection, the other direction stays open while data
+flows, and the connection closes after one minute of silence.
 
 ## Data and operational limits
 
@@ -286,6 +288,11 @@ new HTTPS connections; established sessions keep their existing upstream.
   share, so both together use about 19 MB.
   - You do not need to set anything. With `memory_limit_mb` at `0`, cfipd frees
     memory more often only when the host runs short of free memory.
+  - When the host has less free memory than twice what cfipd uses, cfipd also
+    drops prefix statistics that were not probed for a day (it keeps the good
+    ones) and keeps at most a quarter of `candidate_cap` candidates. With the
+    state of a real host, this freed about 0.3 MB. Sampling relearns the dropped
+    prefixes by probing. `cfipd status` shows `"low": true` during this time.
   - On a small router, keep `cfipd-web` off. This saves about 5 MB.
   - You can also set `memory_limit_mb` to `12`. In a test, the daemon then used
     about 12.6 MB instead of 14.2 MB, for a little more CPU.

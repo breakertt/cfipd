@@ -325,14 +325,32 @@ func (c *cursor) vec(lenBytes int) []byte {
 // relayBufs holds the copy buffers of relay connections.
 var relayBufs = sync.Pool{New: func() any { b := make([]byte, 16<<10); return &b }}
 
+// finReader refreshes the read deadline of c before each read once the other
+// direction has ended cleanly, so a half-closed connection lives while data
+// flows and ends after idle of silence.
+type finReader struct {
+	r    io.Reader
+	c    net.Conn
+	half *atomic.Bool
+	idle time.Duration
+}
+
+func (f finReader) Read(p []byte) (int, error) {
+	if f.half.Load() {
+		f.c.SetReadDeadline(time.Now().Add(f.idle))
+	}
+	return f.r.Read(p)
+}
+
 // copyCounted copies src to dst through a pooled 16 KiB buffer (one full TLS
-// record per read) and counts the
-// bytes into each counter. Wrapping src hides net.TCPConn's WriteTo, which would allocate its
-// own 32 KiB buffer for every direction of every connection.
-func copyCounted(dst io.Writer, src io.Reader, ns ...*atomic.Int64) {
+// record per read) and counts the bytes into each counter; the error is nil
+// when src ended cleanly. Wrapping src hides net.TCPConn's WriteTo, which would
+// allocate its own 32 KiB buffer for every direction of every connection.
+func copyCounted(dst io.Writer, src io.Reader, ns ...*atomic.Int64) error {
 	buf := relayBufs.Get().(*[]byte)
 	defer relayBufs.Put(buf)
-	io.CopyBuffer(countWriter{dst, ns}, struct{ io.Reader }{src}, *buf)
+	_, err := io.CopyBuffer(countWriter{dst, ns}, struct{ io.Reader }{src}, *buf)
+	return err
 }
 
 type countWriter struct {
@@ -492,21 +510,30 @@ func (d *daemon) handleRelayConn(c net.Conn) {
 	defer chosen.Stat.Conns.Add(-1)
 
 	st := chosen.Stat
-	done := make(chan struct{}, 2)
+	done := make(chan error, 2)
+	var half atomic.Bool
 	go func() {
 		sniff := &sniSniffer{r: c, found: func(name string) { d.conns.setSNI(cr, name) }}
-		copyCounted(up, sniff, &st.BytesUp, &cs.up, &cr.bytesUp)
+		err := copyCounted(up, finReader{sniff, c, &half, d.halfCloseIdle}, &st.BytesUp, &cs.up, &cr.bytesUp)
 		if tc, ok := up.(*net.TCPConn); ok {
 			tc.CloseWrite()
 		}
-		done <- struct{}{}
+		done <- err
 	}()
 	go func() {
-		copyCounted(c, up, &st.BytesDown, &cs.down, &cr.bytesDown)
+		err := copyCounted(c, finReader{up, up, &half, d.halfCloseIdle}, &st.BytesDown, &cs.down, &cr.bytesDown)
 		if tc, ok := c.(*net.TCPConn); ok {
 			tc.CloseWrite()
 		}
-		done <- struct{}{}
+		done <- err
 	}()
-	<-done
+	// A clean end is a half-close: the other direction may still carry the
+	// reply, so let it finish while it is not idle. An error ends both at once.
+	if err := <-done; err == nil {
+		half.Store(true)
+		deadline := time.Now().Add(d.halfCloseIdle)
+		c.SetReadDeadline(deadline)
+		up.SetReadDeadline(deadline)
+		<-done
+	}
 }

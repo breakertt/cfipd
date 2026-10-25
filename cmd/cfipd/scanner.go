@@ -119,10 +119,14 @@ func (s *PrefixStat) stale(now time.Time) bool { return now.Sub(s.LastProbe) > 7
 
 // prune drops v6 statistics stale for more than 7 days: goodV6 already skips
 // them, and v6 /48 keys are the only statistics that grow without bound. v4
-// keys are limited to the bundled /24 table and keep steering sampling.
-func (s *Scanner) prune(now time.Time) {
+// keys are limited to the bundled /24 table and keep steering sampling. While
+// memory is low it also drops every statistic not probed for a day, except
+// good ones.
+func (s *Scanner) prune(now time.Time, lowMem bool) {
+	ref := s.refRTT()
 	for k, st := range s.stats {
-		if strings.Contains(k, ":") && st.stale(now) {
+		if strings.Contains(k, ":") && st.stale(now) ||
+			lowMem && now.Sub(st.LastProbe) > 24*time.Hour && !st.good(ref) {
 			delete(s.stats, k)
 		}
 	}

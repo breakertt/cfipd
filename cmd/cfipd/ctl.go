@@ -146,7 +146,7 @@ func (d *daemon) handleCtl(req ctlRequest) {
 			"pk":           pk,
 			"probes_today": d.dayCounts,
 			"bytes_today":  d.pool.dayBytes,
-			"memory_mb":    map[string]any{"go_in_use": goMemoryInUse() >> 20, "limit": memoryLimitMB()},
+			"memory_mb":    map[string]any{"go_in_use": goMemoryInUse() >> 20, "limit": memoryLimitMB(), "low": d.lowMem},
 		}
 	case "/actives":
 		rep.v = views(d.cfg, d.pool.actives(), now)
