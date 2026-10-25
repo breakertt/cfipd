@@ -72,7 +72,9 @@ are in `fixtures_test.go`.
   over `rttLimit` or confirmed under the promotion floor. A PK challenger must be faster and reach
   the bandwidth floor, unless the incumbent itself is under the floor.
 - An elective replacement needs a fresh same-window PK, an independent confirmation of the same
-  pair, and a valid bandwidth comparison. Before the commit, check roles, diversity rules, and
+  pair, and a valid bandwidth comparison. An urgent pair (incumbent at least `urgentRatio` times
+  slower) only starts sooner, tolerates `urgentExtraFails` lost challenger probes, and skips the
+  daily comparison budget. It keeps every other step. Before the commit, check roles, diversity rules, and
   generations again. A swap is one for one and does not change the number of actives. An atomic
   swap does not affect established relay connections.
 - Snapshot migrations and restarts keep the real validation progress, the schedules, the PK

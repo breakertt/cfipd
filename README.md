@@ -222,6 +222,13 @@ first 24 hours, PK records proposed swaps without applying them. Fault recovery
 still operates, and the observation deadline survives restarts. PK also runs
 when the pool has fewer actives than `active_count` and no backup can fill it.
 
+PK starts a new pair at most every 30 minutes. When the incumbent is at least 1.5
+times slower than the challenger, the pair is urgent. An urgent pair can start
+every five minutes, and the challenger may lose two of its eight probes. The
+daily limit of bandwidth comparisons does not apply to an urgent pair. The other
+rules stay, including the confirmation and the bandwidth floor. A pair that
+loses a round waits 30 minutes, but the next challenger can try at once.
+
 The score combines probe time and bandwidth: probe time^−(1−w) × bandwidth^w, where
 w is `bandwidth_weight`. The score uses ratios, so the units cancel. With the
 default w of 0.4, 1% less probe time counts 1.5 times as much as 1% more bandwidth.

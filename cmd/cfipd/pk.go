@@ -24,8 +24,32 @@ type pkRun struct {
 // comparison instead of voiding it; with half or more failed, availability
 // alone decides. pkPairEligible has already required the challenger's window
 // median to beat the incumbent's, so this cannot crown a slow challenger.
+// An urgent pair has an incumbent at least urgentRatio times slower than its
+// challenger: in score terms the latency gap alone outweighs any bandwidth the
+// incumbent can offer. Urgent pairs start every urgentPKEvery instead of the
+// 30-minute elective slot, the challenger may lose urgentExtraFails more
+// probes (a congested path rarely gives a clean run), and a confirmed winner
+// is not held back by the daily budget of full bandwidth comparisons.
+const (
+	urgentRatio      = 1.5
+	urgentPKEvery    = 5 * time.Minute
+	urgentExtraFails = 2
+)
+
+func urgentPair(challMed, incMed float64) bool {
+	return challMed > 0 && incMed >= urgentRatio*challMed
+}
+
+// urgent applies urgentPair to the paired medians of the run.
+func (r *pkRun) urgent(cfg *Config) bool {
+	return urgentPair(median(r.challRTT), median(r.incSamples(cfg)))
+}
+
 func (r *pkRun) pass(cfg *Config) (bool, string) {
 	required := cfg.PromoteProbes - cfg.PromoteMaxFails
+	if r.urgent(cfg) {
+		required -= urgentExtraFails
+	}
 	if r.challOK < required {
 		return false, fmt.Sprintf("challenger availability %d/%d ok (need %d)", r.challOK, cfg.PromoteProbes, required)
 	}
@@ -65,8 +89,9 @@ type pkPending struct {
 }
 
 // evalPK looks for a credible challenger. Elective comparisons are capped at
-// one per 30m; a pending confirmation round follows its own due time. Failed
-// pairs back off instead of retriggering on unchanged evidence.
+// one per 30m, urgent ones at one per urgentPKEvery; a pending confirmation
+// round follows its own due time. Failed pairs back off instead of
+// retriggering on unchanged evidence, and the next challenger may try.
 func (d *daemon) evalPK(now time.Time) {
 	if d.longJobBlocked(now, false) != "" {
 		return
@@ -96,10 +121,15 @@ func (d *daemon) nextPKPair(now time.Time) (*IP, *IP) {
 		}
 		d.pkPending = nil
 	}
-	if now.Sub(d.pkLastEval) < 30*time.Minute {
+	if now.Sub(d.pkLastEval) < urgentPKEvery {
 		return nil, nil
 	}
-	return d.pool.pickPKPair(now)
+	held := func(sb, inc *IP) bool { return now.Before(d.pkFailUntil[sb.Addr+">"+inc.Addr]) }
+	sb, inc := d.pool.pickPKPair(now, held)
+	if sb != nil && now.Sub(d.pkLastEval) < 30*time.Minute && !urgentPair(sb.medianRTT(), inc.medianRTT()) {
+		return nil, nil // not urgent: wait for the elective slot
+	}
+	return sb, inc
 }
 
 func usablePKIncumbent(a *IP) bool {
@@ -122,7 +152,8 @@ func (p *Pool) pkPairEligible(sb, inc *IP, now time.Time) bool {
 
 // pickPKPair targets the worst usable active with a fresh credible challenger.
 // Degraded-but-available incumbents belong here; unavailable ones need fill.
-func (p *Pool) pickPKPair(now time.Time) (challenger, incumbent *IP) {
+// held, if not nil, skips pairs that lost a recent round.
+func (p *Pool) pickPKPair(now time.Time, held func(sb, inc *IP) bool) (challenger, incumbent *IP) {
 	for _, a := range p.actives() {
 		if usablePKIncumbent(a) && (incumbent == nil || a.medianRTT() > incumbent.medianRTT()) {
 			incumbent = a
@@ -132,7 +163,7 @@ func (p *Pool) pickPKPair(now time.Time) (challenger, incumbent *IP) {
 		return nil, nil
 	}
 	for _, sb := range p.rankedStandbys() {
-		if p.pkPairEligible(sb, incumbent, now) {
+		if p.pkPairEligible(sb, incumbent, now) && (held == nil || !held(sb, incumbent)) {
 			return sb, incumbent
 		}
 	}
@@ -229,7 +260,7 @@ func (d *daemon) applyPK(r jobResult, now time.Time) {
 	if d.pool.pk.Day != day {
 		d.pool.pk.Day, d.pool.pk.BWUsed = day, 0
 	}
-	if d.pool.pk.BWUsed >= 2 {
+	if d.pool.pk.BWUsed >= 2 && !r.pk.urgent(d.cfg) {
 		log.Printf("PK %s confirmed (%s) but daily bandwidth budget spent; light observation continues", r.ip, why)
 		return
 	}
@@ -239,7 +270,7 @@ func (d *daemon) applyPK(r jobResult, now time.Time) {
 	// No longJobBlocked check here: evalPK passed it when this PK started, and
 	// pkRunning has blocked every other long job and download since then.
 	j := job{kind: jSpeed, ip: r.ip, peer: r.peer, gen: sb.Gen, peerGen: inc.Gen}
-	log.Printf("PK %s confirmed (%s), bandwidth check (%d/2 today)", r.ip, why, d.pool.pk.BWUsed)
+	log.Printf("PK %s confirmed (%s), bandwidth check (%d/2 today, urgent pairs exempt)", r.ip, why, d.pool.pk.BWUsed)
 	go func() { d.sendResult(d.execSpeed(d.ctx, j)) }()
 }
 
