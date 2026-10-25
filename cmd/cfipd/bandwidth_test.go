@@ -254,3 +254,22 @@ func TestRecheckLogMatchesAction(t *testing.T) {
 		t.Fatalf("on a slow link the event must say nothing changes:\n%s", log)
 	}
 }
+
+// A shorter speed_recheck also applies to rechecks scheduled under a longer
+// one: an active is due at most speed_recheck after its last sample.
+func TestShorterRecheckAppliesToOldSchedule(t *testing.T) {
+	d := testDaemon(t)
+	d.ctx = cancelledCtx()
+	d.cfg.SpeedRecheck = Duration{time.Hour}
+	a := sinActive("198.18.0.1", 270)
+	a.Speed, a.SpeedAt, a.SpeedDue = 300, t0, t0.Add(12*time.Hour) // scheduled under the old 12h
+	d.pool.ips[a.Addr] = a
+	d.recheckBandwidth(t0.Add(30 * time.Minute))
+	if d.rechecking {
+		t.Fatal("30 minutes after the last sample the active is not due yet")
+	}
+	d.recheckBandwidth(t0.Add(61 * time.Minute))
+	if !d.rechecking {
+		t.Fatalf("61 minutes after the last sample a 1h recheck must run, due was %v", a.SpeedDue.Sub(t0))
+	}
+}
