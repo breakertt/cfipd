@@ -525,12 +525,12 @@ func (p *Pool) applyCandidate(ip *IP, r ProbeResult, now time.Time) []string {
 
 	sbs := p.standbys()
 	if len(sbs) >= cfg.StandbyMax {
-		worst := p.rankedStandbys()[len(sbs)-1]
-		if med >= worst.medianRTT() {
+		// standby_max 0 leaves no standby to compare against: no room at all.
+		if len(sbs) == 0 || med >= p.rankedStandbys()[len(sbs)-1].medianRTT() {
 			p.remove(ip.Addr)
 			return []string{fmt.Sprintf("%s candidate passed but not needed, left pool (med=%.0fms)", ip.Addr, med)}
 		}
-		p.remove(worst.Addr)
+		p.remove(p.rankedStandbys()[len(sbs)-1].Addr)
 	}
 	ip.Role = RoleStandby
 	ip.ConsecFail = 0

@@ -486,3 +486,15 @@ func TestFillSkipsGapWhenUnderHalf(t *testing.T) {
 		t.Fatal("the HTTP 429 pause must hold even for an urgent fill")
 	}
 }
+
+// A panic in off-loop work costs only that unit: guard logs it and marks the
+// unit failed, so the process and the running-job flags survive.
+func TestGuardContainsPanics(t *testing.T) {
+	res := func() (r jobResult) {
+		defer guard("test job", func() { r = jobResult{job: job{kind: jPK}, err: "panic"} })
+		panic("fixture panic")
+	}()
+	if res.err != "panic" {
+		t.Fatalf("a panicking job must end as failed, got %+v", res)
+	}
+}

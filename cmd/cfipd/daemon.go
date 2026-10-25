@@ -6,6 +6,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"runtime/debug"
 	"sync/atomic"
 	"time"
 )
@@ -188,6 +189,28 @@ func (d *daemon) run(ctx context.Context) error {
 	}
 }
 
+// guard ends one unit of off-loop work (a job, a relay connection) that
+// panicked. A panic there is a bug, but it must cost only that unit, not the
+// daemon and its relay: guard logs it with the stack and calls failed, which
+// turns the unit into a failed result. Fatal runtime errors, such as a
+// concurrent map write, cannot be recovered; only keeping loop state on the
+// loop prevents those.
+func guard(what string, failed func()) {
+	if v := recover(); v != nil {
+		log.Printf("panic in %s: %v\n%s", what, v, debug.Stack())
+		if failed != nil {
+			failed()
+		}
+	}
+}
+
+// safeExec runs exec under guard: a panicking job reports as failed, so the
+// event loop still clears its running flags.
+func (d *daemon) safeExec(ctx context.Context, j job) (r jobResult) {
+	defer guard(fmt.Sprintf("job %d for %s", j.kind, j.ip), func() { r = jobResult{job: j, err: "panic"} })
+	return d.exec(ctx, j)
+}
+
 func (d *daemon) worker(ctx context.Context) {
 	for {
 		var j job
@@ -201,7 +224,7 @@ func (d *daemon) worker(ctx context.Context) {
 			j = next
 		}
 		select {
-		case d.results <- d.exec(ctx, j):
+		case d.results <- d.safeExec(ctx, j):
 		case <-ctx.Done():
 			return // never block a worker on a result nobody will read
 		}
@@ -227,6 +250,8 @@ func (d *daemon) exec(ctx context.Context, j job) jobResult {
 		return d.execPK(ctx, j)
 	case jSpeed:
 		return d.execSpeed(ctx, j)
+	case jRecheck:
+		return d.execRecheck(ctx, j)
 	default:
 		return jobResult{job: j, probe: probe(ctx, d.cfg, j.ip)}
 	}
@@ -501,7 +526,7 @@ func (d *daemon) startPromotion(sb *IP, j job) {
 	d.promoting = true
 	j.kind, j.ip, j.limit, j.gen = jPromote, sb.Addr, d.pool.rttLimit(), sb.Gen
 	log.Printf("promotion test: %s (colo=%s med=%.0fms)", sb.Addr, sb.Colo, sb.medianRTT())
-	go func() { d.sendResult(d.execPromote(d.ctx, j)) }()
+	go func() { d.sendResult(d.safeExec(d.ctx, j)) }()
 }
 
 // scanInterval follows need and useful yield: bootstrap fast, deficit fast,

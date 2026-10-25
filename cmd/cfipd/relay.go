@@ -453,7 +453,10 @@ func (d *daemon) serveRelay(ctx context.Context) {
 		if err != nil {
 			return
 		}
-		go d.handleRelayConn(c)
+		go func() {
+			defer guard("relay connection", nil) // its own defers close it and record it
+			d.handleRelayConn(c)
+		}()
 	}
 }
 

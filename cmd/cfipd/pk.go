@@ -139,7 +139,7 @@ func (d *daemon) evalPK(now time.Time) {
 		kind = "urgent PK probe"
 	}
 	log.Printf("%s: %s (med=%.0fms) vs %s (ref=%.0fms)", kind, sb.Addr, sb.medianRTT(), worst.Addr, pkRef(worst))
-	go func() { d.sendResult(d.execPK(d.ctx, j)) }()
+	go func() { d.sendResult(d.safeExec(d.ctx, j)) }()
 }
 
 // nextPKPair applies the elective-comparison and confirmation deadlines.
@@ -309,7 +309,7 @@ func (d *daemon) applyPK(r jobResult, now time.Time) {
 	// pkRunning has blocked every other long job and download since then.
 	j := job{kind: jSpeed, ip: r.ip, peer: r.peer, gen: sb.Gen, peerGen: inc.Gen}
 	log.Printf("PK %s confirmed (%s), bandwidth check (%d/2 today, urgent pairs exempt)", r.ip, why, d.pool.pk.BWUsed)
-	go func() { d.sendResult(d.execSpeed(d.ctx, j)) }()
+	go func() { d.sendResult(d.safeExec(d.ctx, j)) }()
 }
 
 // applySpeed takes the final PK decision. Both serial measurements must be

@@ -238,3 +238,18 @@ func TestZoneProbeRestrictedStandbyIsCooledDownAtOnce(t *testing.T) {
 		t.Fatalf("standby must be parked as a cooling-down candidate after one 1034 (no two-strike rule), got role=%v cooldown=%v", ip.Role, ip.CooldownUntil)
 	}
 }
+
+// standby_max 0 is a valid configuration: a candidate that passes validation
+// has no room and leaves the pool, without indexing an empty standby list.
+func TestCandidateWithZeroStandbyMax(t *testing.T) {
+	d := testDaemon(t)
+	d.cfg.StandbyMax = 0
+	c := &IP{Addr: "198.18.5.1", Role: RoleCandidate, Colo: "SIN", FirstSeen: t0}
+	d.pool.ips[c.Addr] = c
+	for i := range d.cfg.ValidationObs {
+		d.pool.applyCandidate(c, ProbeResult{OK: true, Totalms: 200, Colo: "SIN"}, t0.Add(time.Duration(i)*time.Second))
+	}
+	if d.pool.get(c.Addr) != nil {
+		t.Fatal("with standby_max 0 the candidate must leave the pool")
+	}
+}

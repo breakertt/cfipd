@@ -22,7 +22,7 @@ func (d *daemon) recheckBandwidth(now time.Time) {
 		d.rechecking = true
 		j := job{kind: jRecheck, ip: a.Addr, gen: a.Gen}
 		log.Printf("bandwidth recheck: %s (last %.1fMbps)", a.Addr, a.Speed)
-		go func() { d.sendResult(d.execRecheck(d.ctx, j)) }()
+		go func() { d.sendResult(d.safeExec(d.ctx, j)) }()
 		return
 	}
 }
