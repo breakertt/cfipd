@@ -171,8 +171,11 @@ func (d *daemon) run(ctx context.Context) error {
 		case req := <-d.ctl:
 			d.handleCtl(req)
 		case <-mem.C:
+			was := d.lowMem
 			if _, d.lowMem = tuneMemory(d.cfg); d.lowMem {
-				d.shedMemory(time.Now())
+				d.shedMemory(time.Now(), !was)
+			} else if was {
+				log.Printf("memory is no longer low; candidate cap back to %d", d.cfg.CandidateCap)
 			}
 		case <-snap.C:
 			d.pool.pruneCandidates(time.Now(), d.candidateCap())

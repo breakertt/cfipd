@@ -325,19 +325,23 @@ func (c *cursor) vec(lenBytes int) []byte {
 // relayBufs holds the copy buffers of relay connections.
 var relayBufs = sync.Pool{New: func() any { b := make([]byte, 16<<10); return &b }}
 
-// finReader refreshes the read deadline of c before each read once the other
-// direction has ended cleanly, so a half-closed connection lives while data
-// flows and ends after idle of silence.
+// finReader refreshes the read and write deadlines of both sockets before each
+// read once the other direction has ended cleanly, so a half-closed connection
+// lives while data flows and ends after idle without progress: a read that
+// waits or a write to a peer that stops reading.
 type finReader struct {
-	r    io.Reader
-	c    net.Conn
-	half *atomic.Bool
-	idle time.Duration
+	r     io.Reader
+	conns [2]net.Conn
+	half  *atomic.Bool
+	idle  time.Duration
 }
 
 func (f finReader) Read(p []byte) (int, error) {
 	if f.half.Load() {
-		f.c.SetReadDeadline(time.Now().Add(f.idle))
+		deadline := time.Now().Add(f.idle)
+		for _, c := range f.conns {
+			c.SetDeadline(deadline)
+		}
 	}
 	return f.r.Read(p)
 }
@@ -514,14 +518,14 @@ func (d *daemon) handleRelayConn(c net.Conn) {
 	var half atomic.Bool
 	go func() {
 		sniff := &sniSniffer{r: c, found: func(name string) { d.conns.setSNI(cr, name) }}
-		err := copyCounted(up, finReader{sniff, c, &half, d.halfCloseIdle}, &st.BytesUp, &cs.up, &cr.bytesUp)
+		err := copyCounted(up, finReader{sniff, [2]net.Conn{c, up}, &half, d.halfCloseIdle}, &st.BytesUp, &cs.up, &cr.bytesUp)
 		if tc, ok := up.(*net.TCPConn); ok {
 			tc.CloseWrite()
 		}
 		done <- err
 	}()
 	go func() {
-		err := copyCounted(c, finReader{up, up, &half, d.halfCloseIdle}, &st.BytesDown, &cs.down, &cr.bytesDown)
+		err := copyCounted(c, finReader{up, [2]net.Conn{c, up}, &half, d.halfCloseIdle}, &st.BytesDown, &cs.down, &cr.bytesDown)
 		if tc, ok := c.(*net.TCPConn); ok {
 			tc.CloseWrite()
 		}
@@ -532,8 +536,8 @@ func (d *daemon) handleRelayConn(c net.Conn) {
 	if err := <-done; err == nil {
 		half.Store(true)
 		deadline := time.Now().Add(d.halfCloseIdle)
-		c.SetReadDeadline(deadline)
-		up.SetReadDeadline(deadline)
+		c.SetDeadline(deadline)
+		up.SetDeadline(deadline)
 		<-done
 	}
 }

@@ -146,7 +146,7 @@ It logs every problem that `cfipd test` reports.
 | `bandwidth_weight` | Weight of bandwidth against probe time in the score, from `0` (probe time only) to `1` (bandwidth only) | `0.4` |
 | `speed_recheck` | Interval between bandwidth rechecks of each active; `"0s"` disables them | `"12h"` |
 | `speed_gap` | Minimum time between the starts of bandwidth tests; an HTTP 429 answer pauses tests for at least an hour | `"15m"` |
-| `memory_limit_mb` | Memory cap of the daemon in MB; `0` is automatic (see "Data and operational limits") | `0` |
+| `memory_limit_mb` | Memory cap of the daemon in MiB; `0` is automatic (see "Data and operational limits") | `0` |
 
 The full configuration is defined in
 [config.go](https://github.com/breakertt/cfipd/blob/main/cmd/cfipd/config.go). A direct run
@@ -261,7 +261,8 @@ the public outer name. Requests that reuse the same HTTPS connection keep the sa
 upstream; selection happens per connection, not per HTTP request. Swaps affect
 new HTTPS connections; established sessions keep their existing upstream. When
 one side half-closes a connection, the other direction stays open while data
-flows, and the connection closes after one minute of silence.
+flows, and the connection closes after one minute without progress: no data to
+read, or a peer that stops reading.
 
 ## Data and operational limits
 
@@ -288,11 +289,14 @@ flows, and the connection closes after one minute of silence.
   share, so both together use about 19 MB.
   - You do not need to set anything. With `memory_limit_mb` at `0`, cfipd frees
     memory more often only when the host runs short of free memory.
-  - When the host has less free memory than twice what cfipd uses, cfipd also
-    drops prefix statistics that were not probed for a day (it keeps the good
-    ones) and keeps at most a quarter of `candidate_cap` candidates. With the
-    state of a real host, this freed about 0.3 MB. Sampling relearns the dropped
-    prefixes by probing. `cfipd status` shows `"low": true` during this time.
+  - When the host has less free memory than twice the Go memory in use
+    (`go_in_use` in `cfipd status`), cfipd also drops prefix statistics that
+    were not probed for a day (it keeps the good ones) and keeps at most a
+    quarter of `candidate_cap` candidates. With the state of a real host, this
+    freed about 0.3 MB. Most dropped statistics describe dead prefixes, so
+    sampling spends probes to learn them again: about 3,400 prefixes at three
+    probes each on that host. `cfipd status` shows `"low": true` during this
+    time.
   - On a small router, keep `cfipd-web` off. This saves about 5 MB.
   - You can also set `memory_limit_mb` to `12`. In a test, the daemon then used
     about 12.6 MB instead of 14.2 MB, for a little more CPU.

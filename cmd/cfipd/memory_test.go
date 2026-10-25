@@ -90,7 +90,7 @@ func TestShedMemory(t *testing.T) {
 	}
 
 	d.lowMem = true
-	d.shedMemory(now)
+	d.shedMemory(now, true)
 	for k, keep := range map[string]bool{"198.18.1": false, "198.18.2": true, "198.18.3": true, "2001:db8:1::": false} {
 		if _, ok := d.scan.stats[k]; ok != keep {
 			t.Errorf("low memory: statistic %s kept=%v, want %v", k, ok, keep)

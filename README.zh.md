@@ -133,7 +133,7 @@ systemd 服务传入 `-config /etc/cfipd.json`，所以 `CFIPD_CONFIG_PATH` 不�
 | `bandwidth_weight` | 分数中带宽相对探测耗时的权重，`0` 只看探测耗时，`1` 只看带宽 | `0.4` |
 | `speed_recheck` | 每个 Active 带宽复测的间隔；`"0s"` 关闭复测 | `"12h"` |
 | `speed_gap` | 两次带宽测试开始时间之间的最短间隔；遇到 HTTP 429 至少暂停一小时 | `"15m"` |
-| `memory_limit_mb` | daemon 的内存上限（MB）；`0` 为自动，见「数据与运行限制」 | `0` |
+| `memory_limit_mb` | daemon 的内存上限（MiB）；`0` 为自动，见「数据与运行限制」 | `0` |
 
 完整配置见 [config.go](https://github.com/breakertt/cfipd/blob/main/cmd/cfipd/config.go)。
 直接运行默认使用 `/tmp/cfipd.sock`，Debian 包通过配置改为 `/run/cfipd/ctl.sock`。
@@ -219,7 +219,7 @@ TLS 握手和 HTTP 请求由客户端与 Cloudflare 处理。为了连接列表�
 TLS ClientHello 里的服务器名（SNI）；客户端用了加密 ClientHello（ECH）时，读到的是外层的公共名。复用同一条 HTTPS 连接的请求继续
 使用同一个上游；选 IP 发生在建连时，不是每个 HTTP 请求各选一次。
 换位只影响新的 HTTPS 连接，已经建立的会话继续使用原上游。一端半关闭连接后，
-另一个方向只要还有数据就继续传，静默一分钟后关闭连接。
+另一个方向只要还有数据就继续传；一分钟没有进展（读不到数据，或对端不再读取）就关闭连接。
 
 ## 数据与运行限制
 
@@ -238,9 +238,11 @@ TLS ClientHello 里的服务器名（SNI）；客户端用了加密 ClientHello�
   是程序文件本身，两个进程共用这一份，所以两者合计约 19MB。
   - 默认不需要任何设置。`memory_limit_mb` 为 `0` 时，只有主机剩余内存不足，cfipd 才会
     更频繁地回收内存。
-  - 主机剩余内存少于 cfipd 用量的两倍时，cfipd 还会删除一天没探测过的前缀统计（好的
-    保留），候选最多只留 `candidate_cap` 的四分之一。用真实主机的状态测试，这样腾出约
-    0.3MB。被删的前缀由采样重新探测学回来。这段时间 `cfipd status` 显示 `"low": true`。
+  - 主机剩余内存少于 Go 内存用量（`cfipd status` 里的 `go_in_use`）的两倍时，cfipd 还会
+    删除一天没探测过的前缀统计（好的保留），候选最多只留 `candidate_cap` 的四分之一。
+    用真实主机的状态测试，这样腾出约 0.3MB。被删的统计大多是死网段，采样要重新花探测
+    才能学回来：那台主机上约 3400 个前缀，每个约三次探测。这段时间 `cfipd status` 显示
+    `"low": true`。
   - 小内存路由器上不要启用 `cfipd-web`，可省约 5MB。
   - 也可以把 `memory_limit_mb` 设为 `12`。测试中 daemon 从约 14.2MB 降到约 12.6MB，
     代价是多用一点 CPU。

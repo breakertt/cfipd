@@ -79,19 +79,19 @@ func tuneMemory(cfg *Config) (int64, bool) {
 // shedMemory runs each minute while memory is low. Only the prefix statistics
 // (about 1 MB with the full v4 table) and the candidates are large enough to
 // matter: it drops statistics not probed for a day unless they are good, and
-// candidates over the lowered cap, then returns the freed memory to the system.
-// Dropped statistics are learning data; sampling treats those prefixes as
-// unexplored and relearns them by probing.
-func (d *daemon) shedMemory(now time.Time) {
-	stats, cands := len(d.scan.stats), len(d.pool.candidates())
+// candidates over the lowered cap. Dropped statistics are learning data, most
+// of them about dead prefixes; sampling treats those prefixes as unexplored and
+// relearns them by probing. On the first run of a low period it also returns
+// the freed memory to the system and logs; later runs only keep the bounds,
+// and the soft memory limit returns memory from then on.
+func (d *daemon) shedMemory(now time.Time, first bool) {
+	stats := len(d.scan.stats)
 	d.pool.pruneCandidates(now, d.candidateCap())
 	d.scan.prune(now, true)
-	droppedStats, droppedCands := stats-len(d.scan.stats), cands-len(d.pool.candidates())
-	if droppedStats+droppedCands == 0 {
-		return
+	if first {
+		debug.FreeOSMemory()
+		log.Printf("low memory: dropped %d prefix statistics, candidate cap now %d", stats-len(d.scan.stats), d.candidateCap())
 	}
-	debug.FreeOSMemory()
-	log.Printf("low memory: dropped %d prefix statistics and %d candidates", droppedStats, droppedCands)
 }
 
 // candidateCap is candidate_cap, or a quarter of it while memory is low.

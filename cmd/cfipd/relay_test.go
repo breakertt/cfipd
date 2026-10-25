@@ -575,3 +575,37 @@ func TestRelayEndsQuietHalfClosedConnection(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// A client that half-closes and then stops reading cannot pin a streaming
+// upstream: writes have halfCloseIdle to complete, like reads.
+func TestRelayEndsHalfClosedConnectionThatStopsReading(t *testing.T) {
+	d := testDaemon(t)
+	d.halfCloseIdle = 200 * time.Millisecond
+	addr := relayTo(t, d, true, func(c net.Conn) {
+		defer c.Close()
+		io.Copy(io.Discard, c)
+		chunk := make([]byte, 64<<10)
+		for {
+			if _, err := c.Write(chunk); err != nil {
+				return
+			}
+		}
+	})
+	cli, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+	cli.Write([]byte("request"))
+	cli.(*net.TCPConn).CloseWrite() // and never read
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if cs := d.conns.list(); len(cs) == 1 && cs[0].End != "" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("a half-closed client that stops reading must not pin the connection: %+v", d.conns.list())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
