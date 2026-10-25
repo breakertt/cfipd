@@ -227,7 +227,11 @@ times slower than the challenger, the pair is urgent, and PK acts within about t
 minutes:
 
 - The incumbent counts at the slower of its window median and the median of its
-  latest four successful probes, so a fresh slowdown counts at once.
+  latest four successful probes, so a fresh slowdown counts at once. A challenger
+  counts at the median of its latest four successful probes, and PK takes the
+  fastest eligible standby, whatever its rank or colo.
+- While an active is degraded, every standby is probed at least every minute, so
+  PK compares against current numbers.
 - An urgent pair can start every minute. Its round has four probes on each side
   and passes with three successful challenger probes.
 - A win goes straight to the bandwidth comparison, without the confirmation round

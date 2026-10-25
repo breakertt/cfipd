@@ -532,3 +532,58 @@ func TestUrgentPKBypassesDailyBudget(t *testing.T) {
 		}
 	}
 }
+
+// While an active is degraded, every standby is probed within
+// urgentStandbyEvery, so PK compares against current numbers.
+func TestDegradedActiveRefreshesStandbys(t *testing.T) {
+	d, inc, sb := pkPairFixture(t)
+	d.ctx = cancelledCtx()
+	sb.NextProbe = t0.Add(30 * time.Minute)
+	if got := d.pool.standbyEvery(sb); got <= urgentStandbyEvery {
+		t.Fatalf("with healthy actives a standby keeps its normal interval, got %v", got)
+	}
+	inc.State = StateDegraded
+	if got := d.pool.standbyEvery(sb); got > urgentStandbyEvery {
+		t.Fatalf("with a degraded active the interval must be at most %v, got %v", urgentStandbyEvery, got)
+	}
+	d.schedule(t0)
+	if sb.NextProbe.After(t0.Add(urgentStandbyEvery)) {
+		t.Fatalf("a standby due in 30 minutes must be pulled in, next probe %v", sb.NextProbe.Sub(t0))
+	}
+}
+
+// The challenger counts at the median of its latest successful probes: an
+// old fast window does not make a standby look fast now. Probe times are
+// fixtures.
+func TestPKChallengerUsesRecentProbes(t *testing.T) {
+	d, _, sb := pkPairFixture(t)
+	for i := range sb.Win {
+		sb.Win[i].RTT = 150 // eight fast samples hours ago keep the window median at 150...
+	}
+	for range 4 {
+		sb.Win = append(sb.Win, Obs{OK: true, RTT: 800, Colo: "KIX", T: t0}) // ...but it is slow now
+	}
+	if sb.medianRTT() != 150 {
+		t.Fatalf("fixture: window median %v, want 150", sb.medianRTT())
+	}
+	if s, _ := d.pool.pickPKPair(t0, nil); s != nil {
+		t.Fatalf("a standby that is slow now must not challenge a 400 ms incumbent, got %v", s.Addr)
+	}
+}
+
+// Among eligible standbys, PK takes the fastest one now, not the first in rank.
+func TestPKPicksFastestChallenger(t *testing.T) {
+	d, inc, sb := pkPairFixture(t)
+	for i := range sb.Win {
+		sb.Win[i].RTT = 250
+	}
+	fast := freshStandby("198.18.4.1", "KIX", 120)
+	fast.Win[0].OK = false // one failure ranks it after sb
+	d.pool.ips[fast.Addr] = fast
+	if r := d.pool.rankedStandbys(); r[0] != sb {
+		t.Fatal("fixture: sb must rank first")
+	}
+	if s, i := d.pool.pickPKPair(t0, nil); s != fast || i != inc {
+		t.Fatalf("PK must take the fastest eligible standby, got %v", s)
+	}
+}

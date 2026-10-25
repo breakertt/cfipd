@@ -39,19 +39,27 @@ const (
 	urgentProbes     = 4
 	urgentExtraFails = 1
 	urgentGap        = 3 * time.Minute
+	// While an active is degraded, every standby is probed at least this
+	// often, so PK compares against current numbers, not a window that can
+	// span hours.
+	urgentStandbyEvery = time.Minute
 )
 
 func urgentPair(challMed, incMed float64) bool {
 	return challMed > 0 && incMed >= urgentRatio*challMed
 }
 
-// pkRef is the probe time of a PK incumbent: the slower of its window median
-// and the median of its latest four successful probes, so a fresh slowdown
-// counts before it fills half the window.
-func pkRef(ip *IP) float64 {
+// recentRTT is the median of the latest four successful probes: the probe
+// time of an endpoint now. A PK challenger counts at it.
+func recentRTT(ip *IP) float64 {
 	s := ip.okRTTs()
-	recent := s[max(0, len(s)-4):]
-	return max(median(s), median(recent))
+	return median(s[max(0, len(s)-4):])
+}
+
+// pkRef is the probe time of a PK incumbent: the slower of its window median
+// and recentRTT, so a fresh slowdown counts before it fills half the window.
+func pkRef(ip *IP) float64 {
+	return max(ip.medianRTT(), recentRTT(ip))
 }
 
 // n is the number of probes per side in the run.
@@ -123,7 +131,7 @@ func (d *daemon) evalPK(now time.Time) {
 	if sb == nil {
 		return
 	}
-	urgent := urgentPair(sb.medianRTT(), pkRef(worst))
+	urgent := urgentPair(recentRTT(sb), pkRef(worst))
 	if !urgent && d.longJobBlocked(now, gapFull) != "" {
 		return
 	}
@@ -138,7 +146,7 @@ func (d *daemon) evalPK(now time.Time) {
 	if urgent {
 		kind = "urgent PK probe"
 	}
-	log.Printf("%s: %s (med=%.0fms) vs %s (ref=%.0fms)", kind, sb.Addr, sb.medianRTT(), worst.Addr, pkRef(worst))
+	log.Printf("%s: %s (recent=%.0fms) vs %s (ref=%.0fms)", kind, sb.Addr, recentRTT(sb), worst.Addr, pkRef(worst))
 	go func() { d.sendResult(d.safeExec(d.ctx, j)) }()
 }
 
@@ -157,7 +165,7 @@ func (d *daemon) nextPKPair(now time.Time) (*IP, *IP) {
 	}
 	held := func(sb, inc *IP) bool { return now.Before(d.pkFailUntil[sb.Addr+">"+inc.Addr]) }
 	sb, inc := d.pool.pickPKPair(now, held)
-	if sb != nil && now.Sub(d.pkLastEval) < 30*time.Minute && !urgentPair(sb.medianRTT(), pkRef(inc)) {
+	if sb != nil && now.Sub(d.pkLastEval) < 30*time.Minute && !urgentPair(recentRTT(sb), pkRef(inc)) {
 		return nil, nil // not urgent: wait for the elective slot
 	}
 	return sb, inc
@@ -174,7 +182,7 @@ func (p *Pool) pkPairEligible(sb, inc *IP, now time.Time) bool {
 		now.Sub(sb.LastSeen) > 10*time.Minute || len(sb.okRTTs()) < 4 {
 		return false
 	}
-	med, reference := sb.medianRTT(), pkRef(inc)
+	med, reference := recentRTT(sb), pkRef(inc)
 	if med > reference-30 || med > 0.8*reference {
 		return false
 	}
@@ -193,12 +201,17 @@ func (p *Pool) pickPKPair(now time.Time, held func(sb, inc *IP) bool) (challenge
 	if incumbent == nil {
 		return nil, nil
 	}
+	// The fastest eligible standby now challenges, whatever its rank or colo.
 	for _, sb := range p.rankedStandbys() {
-		if p.pkPairEligible(sb, incumbent, now) && (held == nil || !held(sb, incumbent)) {
-			return sb, incumbent
+		if p.pkPairEligible(sb, incumbent, now) && (held == nil || !held(sb, incumbent)) &&
+			(challenger == nil || recentRTT(sb) < recentRTT(challenger)) {
+			challenger = sb
 		}
 	}
-	return nil, nil
+	if challenger == nil {
+		return nil, nil
+	}
+	return challenger, incumbent
 }
 
 // execPK probes challenger and incumbent interleaved, PromoteProbes rounds,

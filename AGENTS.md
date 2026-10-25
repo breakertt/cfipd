@@ -73,7 +73,9 @@ are in `fixtures_test.go`.
   over `rttLimit` or confirmed under the promotion floor. A PK challenger must be faster and reach
   the bandwidth floor, unless the incumbent itself is under the floor.
 - An elective replacement needs a fresh same-window PK, an independent confirmation of the same
-  pair, and a valid bandwidth comparison. An urgent pair (incumbent `pkRef` at least `urgentRatio`
+  pair, and a valid bandwidth comparison. PK compares the incumbent's `pkRef` with the challenger's
+  `recentRTT` and takes the fastest eligible standby. While an active is degraded, standbys are
+  probed every `urgentStandbyEvery`. An urgent pair (incumbent `pkRef` at least `urgentRatio`
   times the challenger) is the exception: it starts every `urgentPKEvery`, runs `urgentProbes`
   probes per side with `urgentExtraFails` losses allowed, and goes to the bandwidth comparison
   without the confirmation round or the daily budget. It keeps the score, the floors, and the

@@ -346,6 +346,13 @@ func (d *daemon) schedule(now time.Time) {
 	// Standbys are per-IP scheduled by their own NextProbe, most overdue
 	// first; no round-robin over a randomly-ordered map.
 	sbs := d.pool.standbys()
+	if d.pool.activeDegraded() { // refresh the standbys now, not on their normal schedule
+		for _, sb := range sbs {
+			if limit := now.Add(urgentStandbyEvery); sb.NextProbe.After(limit) {
+				sb.NextProbe = limit
+			}
+		}
+	}
 	sortByNextProbe(sbs)
 	enq := 0
 	for _, sb := range sbs {

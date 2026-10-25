@@ -396,16 +396,29 @@ func (p *Pool) applyStandby(ip *IP, r ProbeResult, now time.Time) []string {
 
 // standbyEvery: the best two standbys stay hot, the rest cold.
 func (p *Pool) standbyEvery(ip *IP) time.Duration {
-	ranked := p.rankedStandbys()
-	for i, sb := range ranked {
+	every := p.cfg.StandbyCold.Duration
+	for i, sb := range p.rankedStandbys() {
 		if sb == ip {
 			if i < 2 {
-				return p.cfg.StandbyCheck.Duration
+				every = p.cfg.StandbyCheck.Duration
 			}
 			break
 		}
 	}
-	return p.cfg.StandbyCold.Duration
+	if p.activeDegraded() {
+		every = min(every, urgentStandbyEvery)
+	}
+	return every
+}
+
+// activeDegraded reports whether some active is degraded.
+func (p *Pool) activeDegraded() bool {
+	for _, a := range p.actives() {
+		if a.State == StateDegraded {
+			return true
+		}
+	}
+	return false
 }
 
 // bestActiveMedian returns the lowest median RTT among actives, or 0.
