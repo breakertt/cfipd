@@ -133,7 +133,7 @@ systemd 服务传入 `-config /etc/cfipd.json`，所以 `CFIPD_CONFIG_PATH` 不�
 | `bandwidth_weight` | 分数中带宽相对探测耗时的权重，`0` 只看探测耗时，`1` 只看带宽 | `0.4` |
 | `speed_recheck` | 每个 Active 带宽复测的间隔；`"0s"` 关闭复测 | `"12h"` |
 | `speed_gap` | 两次带宽测试开始时间之间的最短间隔；遇到 HTTP 429 至少暂停一小时 | `"15m"` |
-| `memory_limit_mb` | Go 软内存上限（MiB）；`0` 表示跟随主机：当前用量加 `MemAvailable` 的四分之一，余量至少 4MiB 或当前用量的四分之一，且不低于 8MiB | `0` |
+| `memory_limit_mb` | daemon 的内存上限（MB）；`0` 为自动，见「数据与运行限制」 | `0` |
 
 完整配置见 [config.go](https://github.com/breakertt/cfipd/blob/main/cmd/cfipd/config.go)。
 直接运行默认使用 `/tmp/cfipd.sock`，Debian 包通过配置改为 `/run/cfipd/ctl.sock`。
@@ -233,11 +233,15 @@ TLS ClientHello 里的服务器名（SNI）；客户端用了加密 ClientHello�
 - relay 承载基于 TCP 的 HTTPS，不支持基于 QUIC/UDP 的 HTTP/3。
   上游建连失败时会尝试其他 Active，已经建立的流若上游中断则无法挽救。
   在没有客户端流量且使用最慢默认检查间隔时，静默故障可能要约两分钟才被发现。
-- 入口池和前缀数据约占 1MB。daemon 常驻内存的大头是映射进来的二进制文件（约 7MB，
-  与 `cfipd web` 共享）和 Go 运行时的余量。默认的软内存上限跟随主机剩余内存，只在主机
-  内存紧张时收紧。小内存路由器上可设置 `memory_limit_mb`（例如 `12`），让运行时更紧凑，
-  代价是垃圾回收更频繁；环境变量 `GOMEMLIMIT` 优先于它。`cfipd web` 是单独的进程，
-  内存紧张时不要启用。`cfipd status` 显示 Go 当前用量和上限。
+- 内存：在 arm64 主机上，daemon 约占 14MB，`cfipd web` 约占 11MB。其中各有约 6.5MB
+  是程序文件本身，两个进程共用这一份，所以两者合计约 19MB。
+  - 默认不需要任何设置。`memory_limit_mb` 为 `0` 时，只有主机剩余内存不足，cfipd 才会
+    更频繁地回收内存。
+  - 小内存路由器上不要启用 `cfipd-web`，可省约 5MB。
+  - 也可以把 `memory_limit_mb` 设为 `12`。测试中 daemon 从约 14.2MB 降到约 12.6MB，
+    代价是多用一点 CPU。
+  - `cfipd status` 显示当前用量和上限（`memory_mb`）。设置了环境变量 `GOMEMLIMIT` 时，
+    它代替 `memory_limit_mb`。
 - relay 无认证。面板只有可选的 `web_password`，经明文 HTTP 传输。限制监听地址或网络
   访问范围；面板保持回环监听，或只开放给可信网络。设置 `web_password` 后，让
   `/etc/cfipd.json` 只有 root 和 `cfipd` 可读。Debian 包的做法：
