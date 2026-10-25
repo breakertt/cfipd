@@ -36,6 +36,8 @@
     border-radius:99px; padding:.3em .95em; cursor:pointer; }
   nav button:hover { color:var(--ink); border-color:var(--muted); }
   nav button:disabled { opacity:.5; cursor:default; }
+  #sx { position:fixed; right:10px; bottom:10px; z-index:9; font:.72rem var(--mono); color:var(--muted); background:var(--panel);
+    border:1px solid var(--line); border-radius:99px; padding:.4em .9em; opacity:.85; cursor:pointer; }
   #tip { position:fixed; pointer-events:none; display:none; z-index:9; background:var(--panel); border:1px solid var(--line);
     border-radius:6px; padding:.25rem .45rem; font:.72rem var(--mono); white-space:pre; box-shadow:0 2px 8px rgba(0,0,0,.12); }
   [data-tip] { cursor:help; }
@@ -138,6 +140,7 @@
 </header>
 <div id="err"></div>
 <div id="tip"></div>
+<button id="sx"></button>
 
 <div class="ov" id="overview"></div>
 
@@ -164,7 +167,7 @@ let openClients = new Set(); // clients whose connections are shown
 const I18N = {
   en: {
     title: 'cfipd dashboard', refresh: 'Refresh',
-    h_active: 'Active', h_clients: 'Clients',
+    h_active: 'Active', h_clients: 'Clients', sx_hide: 'Hide IPs/domains', sx_show: 'Show IPs/domains',
     c_open: 'open', c_closed: 'closed', c_failed: 'failed',
     h_select: 'Selection', h_standby: 'Standby', faster: 'ms faster than the slowest active',
     st_loading: 'Loading…', st_nocon: 'Cannot reach cfipd', st_lost: 'Connection lost', st_stale: 'Data is stale',
@@ -183,7 +186,7 @@ const I18N = {
   },
   zh: {
     title: 'cfipd 仪表盘', refresh: '刷新',
-    h_active: 'Active', h_clients: '客户端',
+    h_active: 'Active', h_clients: '客户端', sx_hide: '隐藏 IP/域名', sx_show: '显示 IP/域名',
     c_open: '进行中', c_closed: '已结束', c_failed: '失败',
     h_select: '选择', h_standby: 'Standby', faster: '比最慢的 Active 快的毫秒数',
     st_loading: '加载中…', st_nocon: '无法连接 cfipd', st_lost: '连接中断', st_stale: '数据过期',
@@ -220,7 +223,7 @@ const brk = a => esc(a).replace(/([:.])/g, '$1<wbr>'); // addresses and names br
 // A long IPv6 address shows its /48 (the prefix unit of cfipd) and its last
 // group; the tooltip has the whole address.
 const v6short = a => { const g = a.split(':'); return `${g.slice(0, 3).join(':')}:…:${g[g.length - 1]}`; };
-const ip = a => a && a.includes(':') && a.length > 19 ? `<span data-tip="${esc(a)}">${esc(v6short(a))}</span>` : esc(a);
+const ip = a => a && a.includes(':') && a.length > 19 ? `<span data-sx data-tip="${esc(a)}">${esc(v6short(a))}</span>` : esc(a);
 // The same in daemon text, such as a PK verdict (already escaped: no ':' in entities).
 const ipText = s => esc(s).replace(/\b[0-9a-f]{1,4}(?::[0-9a-f]{0,4}){4,7}\b/gi, ip);
 // Go durations: "4m0s" -> "4m", "1h16m53s" -> "1h16m".
@@ -311,15 +314,15 @@ function render(status, standbys, relay, clients, conns) {
     const [st, dot] = !c.end ? [t('c_open'), 'ok'] : c.error ? [t('c_failed'), 'bad'] : [t('c_closed'), 'off'];
     const meta = [`<span>:${esc(c.client.slice(c.client.lastIndexOf(':') + 1))}</span>`, `<span>${clock(c.start)}</span>`,
       c.upstream && `<span class="opt">→ ${ip(c.upstream)}</span>`, c.error && `<span class="bad">${esc(c.error)}</span>`].filter(Boolean).join('');
-    return `<div class="ci"><span class="dot ${dot}" data-tip="${st}"></span><div class="nm">${brk(c.sni || '—')}<span class="cm">${meta}</span></div>
+    return `<div class="ci"><span class="dot ${dot}" data-tip="${st}"></span><div class="nm"><span data-sx>${brk(c.sni || '—')}</span><span class="cm">${meta}</span></div>
       <span class="num">${secs(c.seconds)}</span><span class="num">${bytes(c.bytes_down)}</span></div>`;
   };
   $('clients').innerHTML = clients.length ? `<div class="card tw"><table>
     <thead><tr><th class="l">${t('th_client')}</th><th class="opt">${t('th_open')}</th><th class="opt">${t('th_conns')}</th><th class="opt">${t('th_failed')}</th>
       <th class="opt">${t('th_up')}</th><th>${t('th_down')}</th><th>${t('th_last')}</th></tr></thead>
-    <tbody>${clients.map(c => {
+    <tbody>${clients.map((c, i) => {
       const cs = byClient[c.addr] || [], open = cs.length > 0 && openClients.has(c.addr);
-      const tog = cs.length ? ` class="tog" tabindex="0" role="button" aria-expanded="${open}" data-client="${esc(c.addr)}"` : '';
+      const tog = cs.length ? ` class="tog" tabindex="0" role="button" aria-expanded="${open}" data-i="${i}"` : '';
       return `<tr${tog}><td class="l brk"><span class="chev">${cs.length ? (open ? '▾' : '▸') : ''}</span><span class="dot ${c.open > 0 ? 'ok' : 'off'}"></span><span class="mono addr">${ip(c.addr)}</span></td>
       <td class="opt">${c.open}</td><td class="opt">${c.total}</td><td class="opt ${c.fails ? 'bad' : 'dim'}">${c.fails}</td>
       <td class="opt">${bytes(c.bytes_up)}</td><td>${bytes(c.bytes_down)}</td>
@@ -373,6 +376,7 @@ function applyLang() {
   document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
   $('lang').textContent = lang === 'zh' ? 'EN' : '中文';
   $('refresh').title = t('refresh');
+  $('sx').textContent = t(sxOn ? 'sx_show' : 'sx_hide');
   $('refresh').setAttribute('aria-label', t('refresh'));
   setBadge(); showUpdated(); showErr();
   if (lastData) render(...lastData);
@@ -429,7 +433,7 @@ addEventListener('scroll', () => { tip.style.display = 'none'; }, { passive: tru
 function toggleClient(el) {
   const row = el.closest && el.closest('tr.tog');
   if (!row || !lastData) return;
-  const a = row.dataset.client;
+  const a = lastData[3][Number(row.dataset.i)].addr; // the row holds an index, so hiding cannot touch it
   openClients.has(a) ? openClients.delete(a) : openClients.add(a);
   render(...lastData);
 }
@@ -437,6 +441,74 @@ document.addEventListener('click', ev => toggleClient(ev.target));
 document.addEventListener('keydown', ev => {
   if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.matches && ev.target.matches('tr.tog')) { ev.preventDefault(); toggleClient(ev.target); }
 });
+// Hiding of sensitive text: IP addresses, domains, emails, MACs, and UUIDs in
+// the page text and in title, data-tip, and href, plus whole [data-sx] fields.
+// The text itself is replaced, so screenshots, the inspector, and copies do not
+// show it. The state is in localStorage under 'sx-hide', the key that the other
+// dashboards of the same origin use too. A MutationObserver masks each redraw
+// before it is painted.
+const SX_KEY = 'sx-hide', SX_ATTRS = ['title', 'data-tip', 'href'];
+let sxOn = false;
+try { sxOn = localStorage.getItem(SX_KEY) === '1'; } catch (e) {}
+const SX_RE = new RegExp([
+  String.raw`\b(?:\d{1,3}\.){3}\d{1,3}\b`,                     // IPv4
+  String.raw`\b[0-9a-f]{2}(?::[0-9a-f]{2}){5}\b`,              // MAC
+  String.raw`[\w.+-]+@[\w-]+(?:\.[\w-]+)+`,                    // email
+  String.raw`\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\b`, // UUID
+  String.raw`(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}`,            // IPv6, filtered by sxHit
+  String.raw`\b(?:[a-z0-9-]+\.)+[a-z]{2,24}\b`,                 // domain
+].join('|'), 'gi');
+const sxDots = n => '•'.repeat(Math.max(3, Math.min(n, 24)));
+// A match with ':' counts only as a MAC, or as IPv6 with '::' or at least 5
+// groups: 10:19:33 is a time.
+const sxHit = m => !m.includes(':') || /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/i.test(m) || m.includes('::') || m.split(':').length >= 5;
+const sxMask = s => s.replace(SX_RE, m => sxHit(m) ? sxDots(m.length) : m);
+const sxField = n => { const p = n.nodeType === 1 ? n : n.parentElement; return !!(p && p.closest('[data-sx]')); };
+const sxText = new WeakMap(), sxAttrs = new WeakMap(); // text node -> {o, m}; element -> {attribute: {o, m}}
+function sxNode(n) {
+  const e = sxText.get(n), v = n.nodeValue;
+  if (!sxOn) { if (e && v === e.m) n.nodeValue = e.o; sxText.delete(n); return; }
+  if (e && v === e.m) return; // masked already, and the page did not change it
+  const m = sxField(n) ? v.replace(/\S+/g, w => sxDots(w.length)) : sxMask(v);
+  if (m !== v) { sxText.set(n, { o: v, m }); n.nodeValue = m; } else sxText.delete(n);
+}
+function sxAttr(el, name) {
+  const v = el.getAttribute(name);
+  if (v == null) return;
+  const rec = sxAttrs.get(el) || {}, e = rec[name];
+  if (!sxOn) { if (e && v === e.m) el.setAttribute(name, e.o); delete rec[name]; return; }
+  if (e && v === e.m) return;
+  let d = v;
+  try { d = decodeURIComponent(v); } catch (x) {}
+  // An href encodes ':' as %3A: check it decoded, and drop the link while hidden.
+  const m = name === 'href' ? (sxMask(d) !== d ? '#' : v) : sxField(el) ? sxDots(v.length) : sxMask(v);
+  if (m !== v) { rec[name] = { o: v, m }; sxAttrs.set(el, rec); el.setAttribute(name, m); } else delete rec[name];
+}
+function sxWalk(root) {
+  if (root.nodeType === 3) return sxNode(root);
+  if (root.nodeType !== 1 || /^(SCRIPT|STYLE)$/.test(root.nodeName)) return;
+  for (const el of [root, ...root.querySelectorAll('[title],[data-tip],a[href]')]) for (const a of SX_ATTRS) sxAttr(el, a);
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), list = [];
+  for (let n; (n = w.nextNode());) list.push(n); // collect first: masking must not disturb the walk
+  list.forEach(sxNode);
+}
+new MutationObserver(recs => {
+  for (const r of recs) {
+    if (r.type === 'childList') r.addedNodes.forEach(sxWalk);
+    else if (r.type === 'characterData') sxNode(r.target);
+    else sxAttr(r.target, r.attributeName);
+  }
+}).observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: SX_ATTRS });
+function sxApply() { sxWalk(document.body); $('sx').textContent = t(sxOn ? 'sx_show' : 'sx_hide'); }
+$('sx').onclick = () => {
+  sxOn = !sxOn;
+  try { localStorage.setItem(SX_KEY, sxOn ? '1' : '0'); } catch (e) {}
+  sxApply();
+};
+// Another page of the same origin switched it.
+addEventListener('storage', e => { if (e.key === SX_KEY) { sxOn = e.newValue === '1'; sxApply(); } });
+sxApply();
+
 $('refresh').onclick = () => { clearTimeout(timer); poll(); };
 $('lang').onclick = () => {
   lang = lang === 'zh' ? 'en' : 'zh';
