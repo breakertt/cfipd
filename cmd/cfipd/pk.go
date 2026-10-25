@@ -398,6 +398,9 @@ func (d *daemon) applySpeed(r jobResult, now time.Time) {
 	}
 	sb.Colo = colo
 	d.pool.swapPK(sb, inc, med, now)
+	// The demoted incumbent may not challenge its replacer at once: a short
+	// spike would otherwise swap the two back and forth.
+	d.pkFailUntil[inc.Addr+">"+sb.Addr] = now.Add(30 * time.Minute)
 	d.pkLastVerdict = fmt.Sprintf("%s -> %s swapped (%.1f vs %.1f Mbps)", r.peer, r.ip, r.speed.Mbps, r.speed2.Mbps)
 	d.logEvent(fmt.Sprintf("PK swap: %s -> active, %s -> standby (%.1f vs %.1f Mbps)",
 		sb.Addr, inc.Addr, r.speed.Mbps, r.speed2.Mbps), now)

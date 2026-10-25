@@ -587,3 +587,39 @@ func TestPKPicksFastestChallenger(t *testing.T) {
 		t.Fatalf("PK must take the fastest eligible standby, got %v", s)
 	}
 }
+
+// A bandwidth stage that panicked reports failed downloads, not 0 Mbps
+// samples: nothing is recorded and the pair waits only the short hold.
+func TestPanickedSpeedStageRecordsNothing(t *testing.T) {
+	d, inc, sb := pkPairFixture(t)
+	inc.Speed, inc.BelowFloorN = 100, 0
+	j := job{kind: jSpeed, ip: sb.Addr, peer: inc.Addr, gen: sb.Gen, peerGen: inc.Gen}
+	r := func() (r jobResult) {
+		defer guard("test", func() { r = failedResult(j) })
+		panic("fixture panic")
+	}()
+	d.pkRunning = true
+	d.applySpeed(r, t0)
+	if inc.Speed != 100 || inc.BelowFloorN != 0 || sb.Speed != 0 {
+		t.Fatalf("a panicked stage must record no sample: inc %v Mbps n=%d, sb %v Mbps", inc.Speed, inc.BelowFloorN, sb.Speed)
+	}
+	if until := d.pkFailUntil[sb.Addr+">"+inc.Addr]; until.Sub(t0) > time.Hour {
+		t.Fatalf("an inconclusive stage holds the pair for an hour, got %v", until.Sub(t0))
+	}
+}
+
+// After a PK swap, the demoted incumbent cannot challenge its replacer at
+// once: without the hold, a short spike swaps two endpoints back and forth.
+func TestPKSwapHoldsTheReversePair(t *testing.T) {
+	d, inc, sb := pkPairFixture(t)
+	d.pool.pk.ObserveUntil = t0.Add(-time.Hour)
+	d.pkLastRun = &pkRun{probes: urgentProbes, challOK: urgentProbes, incOK: urgentProbes, challRTT: []float64{150}, incRTT: []float64{400}, challColo: "KIX"}
+	d.applySpeed(jobResult{job: job{kind: jSpeed, ip: sb.Addr, peer: inc.Addr}, ok: true,
+		speed: SpeedResult{Mbps: 300, Colo: "KIX"}, speed2: SpeedResult{Mbps: 300, Colo: "HKG"}}, t0)
+	if sb.Role != RoleActive || inc.Role != RoleStandby {
+		t.Fatal("fixture: the challenger must swap in")
+	}
+	if until := d.pkFailUntil[inc.Addr+">"+sb.Addr]; until.Sub(t0) < 30*time.Minute {
+		t.Fatalf("the demoted incumbent must not challenge its replacer for 30 minutes, hold %v", until.Sub(t0))
+	}
+}

@@ -223,7 +223,7 @@ still operates, and the observation deadline survives restarts. PK also runs
 when the pool has fewer actives than `active_count` and no backup can fill it.
 
 PK starts a new pair at most every 30 minutes. When the incumbent is at least 1.5
-times slower than the challenger, the pair is urgent, and PK acts within about two
+times slower than the challenger, the pair is urgent, and PK acts within a few
 minutes:
 
 - The incumbent counts at the slower of its window median and the median of its
@@ -233,7 +233,8 @@ minutes:
 - While an active is degraded, every standby is probed at least every minute, so
   PK compares against current numbers.
 - An urgent pair can start every minute. Its round has four probes on each side
-  and passes with three successful challenger probes.
+  and passes when the challenger loses at most one probe (or `promote_max_fails`,
+  if that is higher).
 - A win goes straight to the bandwidth comparison, without the confirmation round
   and outside the daily limit. It needs three minutes since the last download,
   not 15.
@@ -241,7 +242,8 @@ minutes:
   stay.
 
 A pair that loses a round waits 30 minutes, but the next challenger can try at
-once.
+once. After a swap, the demoted incumbent cannot challenge its replacer for 30
+minutes, so a short spike does not swap two endpoints back and forth.
 
 The score combines probe time and bandwidth: probe time^−(1−w) × bandwidth^w, where
 w is `bandwidth_weight`. The score uses ratios, so the units cancel. With the
@@ -255,9 +257,10 @@ times the probe time of the best active keeps a quarter of its weight.
 
 Each active gets a new bandwidth measurement about every 90 minutes
 (`speed_recheck`), with random jitter. The actives take turns, because downloads
-stay at least `speed_gap` apart: with three actives, one recheck runs about every
-30 minutes. Each download is about 95 MB, so three actives use about 4.6 GB a
-day. Set a longer `speed_recheck` to use less. A first result under 30 Mbps starts a
+stay at least `speed_gap` apart. The jitter makes the interval 72 to 90 minutes,
+so with three actives one recheck runs about every 27 minutes: about 53 downloads
+of about 95 MB, or 5 GB, a day. PK and promotion downloads come on top. Set a
+longer `speed_recheck` to use less. A first result under 30 Mbps starts a
 confirmation measurement about an hour later. After two such results in a row,
 and while another active measures at least 30 Mbps, the active continues to
 serve with a quarter of its normal relay weight. Each low result from then on

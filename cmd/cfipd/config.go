@@ -145,7 +145,7 @@ func defaultConfig() *Config {
 		BandwidthWeight:  0.4,
 		SpeedBytes:       99_999_999,
 		SpeedTimeout:     Duration{10 * time.Second},
-		SpeedRecheck:     Duration{90 * time.Minute}, // three actives: one recheck about every 30 min, 48 downloads a day
+		SpeedRecheck:     Duration{90 * time.Minute}, // jitter gives 72–90 min: three actives make about 53 rechecks a day
 		SpeedGap:         Duration{15 * time.Minute},
 
 		MaxActivePerPrefix: 1,

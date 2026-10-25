@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"math/rand"
@@ -112,6 +113,9 @@ func (t *clientTable) list() []clientView {
 	sort.Slice(out, func(i, j int) bool { return out[i].Last > out[j].Last })
 	return out
 }
+
+// errCopyPanic ends a relay connection whose copy goroutine panicked.
+var errCopyPanic = errors.New("relay copy panicked")
 
 // recentConns bounds the closed connections that connLog keeps.
 const recentConns = 100
@@ -519,20 +523,26 @@ func (d *daemon) handleRelayConn(c net.Conn) {
 	st := chosen.Stat
 	done := make(chan error, 2)
 	var half atomic.Bool
+	// Each copy reports exactly once, also after a panic, so the handler
+	// never waits for a direction that is gone.
 	go func() {
+		err := errCopyPanic
+		defer func() { done <- err }()
+		defer guard("relay copy up", nil)
 		sniff := &sniSniffer{r: c, found: func(name string) { d.conns.setSNI(cr, name) }}
-		err := copyCounted(up, finReader{sniff, [2]net.Conn{c, up}, &half, d.halfCloseIdle}, &st.BytesUp, &cs.up, &cr.bytesUp)
+		err = copyCounted(up, finReader{sniff, [2]net.Conn{c, up}, &half, d.halfCloseIdle}, &st.BytesUp, &cs.up, &cr.bytesUp)
 		if tc, ok := up.(*net.TCPConn); ok {
 			tc.CloseWrite()
 		}
-		done <- err
 	}()
 	go func() {
-		err := copyCounted(c, finReader{up, [2]net.Conn{c, up}, &half, d.halfCloseIdle}, &st.BytesDown, &cs.down, &cr.bytesDown)
+		err := errCopyPanic
+		defer func() { done <- err }()
+		defer guard("relay copy down", nil)
+		err = copyCounted(c, finReader{up, [2]net.Conn{c, up}, &half, d.halfCloseIdle}, &st.BytesDown, &cs.down, &cr.bytesDown)
 		if tc, ok := c.(*net.TCPConn); ok {
 			tc.CloseWrite()
 		}
-		done <- err
 	}()
 	// A clean end is a half-close: the other direction may still carry the
 	// reply, so let it finish while it is not idle. An error ends both at once.

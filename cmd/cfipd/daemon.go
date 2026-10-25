@@ -207,8 +207,15 @@ func guard(what string, failed func()) {
 // safeExec runs exec under guard: a panicking job reports as failed, so the
 // event loop still clears its running flags.
 func (d *daemon) safeExec(ctx context.Context, j job) (r jobResult) {
-	defer guard(fmt.Sprintf("job %d for %s", j.kind, j.ip), func() { r = jobResult{job: j, err: "panic"} })
+	defer guard(fmt.Sprintf("job %d for %s", j.kind, j.ip), func() { r = failedResult(j) })
 	return d.exec(ctx, j)
+}
+
+// failedResult is the result of a job that panicked. Its downloads carry an
+// error too: a zero SpeedResult would pass validSpeed as a 0 Mbps sample.
+func failedResult(j job) jobResult {
+	failed := SpeedResult{Err: "panic"}
+	return jobResult{job: j, err: "panic", speed: failed, speed2: failed}
 }
 
 func (d *daemon) worker(ctx context.Context) {
