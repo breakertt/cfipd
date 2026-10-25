@@ -256,20 +256,27 @@ func TestRecheckLogMatchesAction(t *testing.T) {
 }
 
 // A shorter speed_recheck also applies to rechecks scheduled under a longer
-// one: an active is due at most speed_recheck after its last sample.
+// one: an active is due at most speed_recheck from now. A dispatched recheck
+// keeps its schedule although SpeedAt is still old.
 func TestShorterRecheckAppliesToOldSchedule(t *testing.T) {
 	d := testDaemon(t)
 	d.ctx = cancelledCtx()
 	d.cfg.SpeedRecheck = Duration{time.Hour}
 	a := sinActive("198.18.0.1", 270)
-	a.Speed, a.SpeedAt, a.SpeedDue = 300, t0, t0.Add(12*time.Hour) // scheduled under the old 12h
+	a.Speed, a.SpeedAt, a.SpeedDue = 300, t0.Add(-13*time.Hour), t0.Add(11*time.Hour) // scheduled under the old 12h
 	d.pool.ips[a.Addr] = a
-	d.recheckBandwidth(t0.Add(30 * time.Minute))
-	if d.rechecking {
-		t.Fatal("30 minutes after the last sample the active is not due yet")
+	d.recheckBandwidth(t0)
+	if d.rechecking || !a.SpeedDue.Equal(t0.Add(time.Hour)) {
+		t.Fatalf("the old schedule must shrink to 1h from now, due %v", a.SpeedDue.Sub(t0))
 	}
 	d.recheckBandwidth(t0.Add(61 * time.Minute))
 	if !d.rechecking {
-		t.Fatalf("61 minutes after the last sample a 1h recheck must run, due was %v", a.SpeedDue.Sub(t0))
+		t.Fatal("the shrunk schedule must run")
+	}
+	d.rechecking = false // fixture: the download failed, SpeedAt stays old
+	due := a.SpeedDue
+	d.recheckBandwidth(t0.Add(62 * time.Minute))
+	if d.rechecking || !a.SpeedDue.Equal(due) {
+		t.Fatalf("a failed recheck must wait for its schedule, not retry at once (due %v)", a.SpeedDue.Sub(t0))
 	}
 }

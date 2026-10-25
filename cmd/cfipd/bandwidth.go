@@ -16,12 +16,10 @@ func (d *daemon) recheckBandwidth(now time.Time) {
 	}
 	for _, a := range d.pool.actives() {
 		// A schedule made under a longer speed_recheck (state.json keeps it)
-		// shrinks to the current one, counted from the last sample.
-		base := a.SpeedAt
-		if base.IsZero() {
-			base = now
-		}
-		if limit := base.Add(d.cfg.SpeedRecheck.Duration); a.SpeedDue.After(limit) {
+		// shrinks to the current one. Count from now, not from the last
+		// sample: a dispatched or failed recheck keeps the old SpeedAt, and
+		// counting from it would retry at once.
+		if limit := now.Add(d.cfg.SpeedRecheck.Duration); a.SpeedDue.After(limit) {
 			a.SpeedDue = limit
 		}
 		if now.Before(a.SpeedDue) {
