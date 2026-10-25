@@ -58,7 +58,8 @@ are in `fixtures_test.go`.
   as a pure TCP RTT.
 - Run all bandwidth downloads (promotion, PK, recheck, replacement, manual promote) one at a time
   through `longJobBlocked`, and keep the `speed_gap` interval. Fill and manual promote do not wait
-  for the interval when fewer than half of the actives remain. Always pause on HTTP 429. The
+  for the interval when fewer than half of the actives remain, and an urgent PK waits only
+  `urgentGap`. Always pause on HTTP 429. The
   decision that starts a PK also covers its bandwidth stage, because the PK holds `pkRunning` for
   the whole time. A new download path must use the same check.
 - Drive scheduling by real demand, benefit, and the deadline of each IP. Capacities and budgets are
@@ -72,10 +73,11 @@ are in `fixtures_test.go`.
   over `rttLimit` or confirmed under the promotion floor. A PK challenger must be faster and reach
   the bandwidth floor, unless the incumbent itself is under the floor.
 - An elective replacement needs a fresh same-window PK, an independent confirmation of the same
-  pair, and a valid bandwidth comparison. An urgent pair (incumbent at least `urgentRatio` times
-  slower) only starts sooner, tolerates `urgentExtraFails` lost challenger probes, and skips the
-  daily comparison budget. It keeps every other step. Before the commit, check roles, diversity rules, and
-  generations again. A swap is one for one and does not change the number of actives. An atomic
+  pair, and a valid bandwidth comparison. An urgent pair (incumbent `pkRef` at least `urgentRatio`
+  times the challenger) is the exception: it starts every `urgentPKEvery`, runs `urgentProbes`
+  probes per side with `urgentExtraFails` losses allowed, and goes to the bandwidth comparison
+  without the confirmation round or the daily budget. It keeps the score, the floors, and the
+  generation checks. Before the commit, check roles, diversity rules, and generations again. A swap is one for one and does not change the number of actives. An atomic
   swap does not affect established relay connections.
 - Snapshot migrations and restarts keep the real validation progress, the schedules, the PK
   observation deadline, and the daily counts and budgets. Log rotation keeps only the latest

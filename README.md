@@ -223,11 +223,21 @@ still operates, and the observation deadline survives restarts. PK also runs
 when the pool has fewer actives than `active_count` and no backup can fill it.
 
 PK starts a new pair at most every 30 minutes. When the incumbent is at least 1.5
-times slower than the challenger, the pair is urgent. An urgent pair can start
-every five minutes, and the challenger may lose two of its eight probes. The
-daily limit of bandwidth comparisons does not apply to an urgent pair. The other
-rules stay, including the confirmation and the bandwidth floor. A pair that
-loses a round waits 30 minutes, but the next challenger can try at once.
+times slower than the challenger, the pair is urgent, and PK acts within about two
+minutes:
+
+- The incumbent counts at the slower of its window median and the median of its
+  latest four successful probes, so a fresh slowdown counts at once.
+- An urgent pair can start every minute. Its round has four probes on each side
+  and passes with three successful challenger probes.
+- A win goes straight to the bandwidth comparison, without the confirmation round
+  and outside the daily limit. It needs three minutes since the last download,
+  not 15.
+- The 20% and 30 ms rule, the score, the bandwidth floor, and the HTTP 429 pause
+  stay.
+
+A pair that loses a round waits 30 minutes, but the next challenger can try at
+once.
 
 The score combines probe time and bandwidth: probe time^−(1−w) × bandwidth^w, where
 w is `bandwidth_weight`. The score uses ratios, so the units cancel. With the
@@ -255,7 +265,7 @@ Bandwidth tests run one at a time and start at least 15 minutes apart
 a row, once for each endpoint. An HTTP 429 answer pauses all tests for at least
 an hour and does not count against the standby. When fewer than half of
 `active_count` actives remain, fill and a manual promote do not wait for the
-gap; the 429 pause still applies. Otherwise the default gap allows at most 96 tests a day.
+gap, and an urgent PK waits only three minutes. The 429 pause still applies. Otherwise the default gap allows at most 96 tests a day.
 
 The implementation uses TCP passthrough to carry HTTPS. For each new client
 connection, it selects an Active IP at random, with weights in proportion to the

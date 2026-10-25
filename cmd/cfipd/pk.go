@@ -11,6 +11,7 @@ import (
 // pkRun holds one paired PK comparison: interleaved fresh probes of the
 // challenger and the incumbent, taken in the same time window.
 type pkRun struct {
+	probes             int // probes per side; 0 means PromoteProbes
 	challRTT, incRTT   []float64
 	challOK, incOK     int
 	challColo, incColo string
@@ -26,18 +27,39 @@ type pkRun struct {
 // median to beat the incumbent's, so this cannot crown a slow challenger.
 // An urgent pair has an incumbent at least urgentRatio times slower than its
 // challenger: in score terms the latency gap alone outweighs any bandwidth the
-// incumbent can offer. Urgent pairs start every urgentPKEvery instead of the
-// 30-minute elective slot, the challenger may lose urgentExtraFails more
-// probes (a congested path rarely gives a clean run), and a confirmed winner
-// is not held back by the daily budget of full bandwidth comparisons.
+// incumbent can offer, so speed matters more than caution. An urgent pair
+// starts every urgentPKEvery instead of the 30-minute elective slot and needs
+// only urgentGap since the last download. Its round has urgentProbes probes per
+// side and passes with urgentExtraFails lost challenger probes (a congested
+// path rarely gives a clean run). A win goes straight to the bandwidth stage,
+// without a confirmation round and outside the daily budget.
 const (
 	urgentRatio      = 1.5
-	urgentPKEvery    = 5 * time.Minute
-	urgentExtraFails = 2
+	urgentPKEvery    = time.Minute
+	urgentProbes     = 4
+	urgentExtraFails = 1
+	urgentGap        = 3 * time.Minute
 )
 
 func urgentPair(challMed, incMed float64) bool {
 	return challMed > 0 && incMed >= urgentRatio*challMed
+}
+
+// pkRef is the probe time of a PK incumbent: the slower of its window median
+// and the median of its latest four successful probes, so a fresh slowdown
+// counts before it fills half the window.
+func pkRef(ip *IP) float64 {
+	s := ip.okRTTs()
+	recent := s[max(0, len(s)-4):]
+	return max(median(s), median(recent))
+}
+
+// n is the number of probes per side in the run.
+func (r *pkRun) n(cfg *Config) int {
+	if r.probes > 0 {
+		return r.probes
+	}
+	return cfg.PromoteProbes
 }
 
 // urgent applies urgentPair to the paired medians of the run.
@@ -46,12 +68,13 @@ func (r *pkRun) urgent(cfg *Config) bool {
 }
 
 func (r *pkRun) pass(cfg *Config) (bool, string) {
-	required := cfg.PromoteProbes - cfg.PromoteMaxFails
+	n := r.n(cfg)
+	required := n - cfg.PromoteMaxFails
 	if r.urgent(cfg) {
-		required -= urgentExtraFails
+		required = min(required, n-urgentExtraFails)
 	}
 	if r.challOK < required {
-		return false, fmt.Sprintf("challenger availability %d/%d ok (need %d)", r.challOK, cfg.PromoteProbes, required)
+		return false, fmt.Sprintf("challenger availability %d/%d ok (need %d)", r.challOK, n, required)
 	}
 	inc := r.incSamples(cfg)
 	challMed, incMed, challP90, incP90 := median(r.challRTT), median(inc), pct90(r.challRTT), pct90(inc)
@@ -62,7 +85,7 @@ func (r *pkRun) pass(cfg *Config) (bool, string) {
 		return false, fmt.Sprintf("p90 %.0fms > incumbent %s", challP90, show(incP90))
 	}
 	return true, fmt.Sprintf("median %s -> %.0fms, p90 %s -> %.0fms, incumbent %d/%d ok",
-		show(incMed), challMed, show(incP90), challP90, r.incOK, cfg.PromoteProbes)
+		show(incMed), challMed, show(incP90), challP90, r.incOK, n)
 }
 
 // show formats a probe time; +Inf stands for failed probes.
@@ -77,7 +100,7 @@ func show(v float64) string {
 // +Inf, slower than any success.
 func (r *pkRun) incSamples(cfg *Config) []float64 {
 	inc := append([]float64(nil), r.incRTT...)
-	for range cfg.PromoteProbes - r.incOK {
+	for range r.n(cfg) - r.incOK {
 		inc = append(inc, math.Inf(1))
 	}
 	return inc
@@ -93,11 +116,15 @@ type pkPending struct {
 // round follows its own due time. Failed pairs back off instead of
 // retriggering on unchanged evidence, and the next challenger may try.
 func (d *daemon) evalPK(now time.Time) {
-	if d.longJobBlocked(now, false) != "" {
+	if d.longJobBlocked(now, gapUrgent) != "" { // the loosest rule; the pair decides below
 		return
 	}
 	sb, worst := d.nextPKPair(now)
 	if sb == nil {
+		return
+	}
+	urgent := urgentPair(sb.medianRTT(), pkRef(worst))
+	if !urgent && d.longJobBlocked(now, gapFull) != "" {
 		return
 	}
 	key := sb.Addr + ">" + worst.Addr
@@ -106,8 +133,12 @@ func (d *daemon) evalPK(now time.Time) {
 	}
 	d.pkLastEval = now
 	d.pkRunning = true
-	j := job{kind: jPK, ip: sb.Addr, peer: worst.Addr, gen: sb.Gen, peerGen: worst.Gen}
-	log.Printf("PK probe: %s (med=%.0fms) vs %s (med=%.0fms)", sb.Addr, sb.medianRTT(), worst.Addr, worst.medianRTT())
+	j := job{kind: jPK, ip: sb.Addr, peer: worst.Addr, gen: sb.Gen, peerGen: worst.Gen, urgent: urgent}
+	kind := "PK probe"
+	if urgent {
+		kind = "urgent PK probe"
+	}
+	log.Printf("%s: %s (med=%.0fms) vs %s (ref=%.0fms)", kind, sb.Addr, sb.medianRTT(), worst.Addr, pkRef(worst))
 	go func() { d.sendResult(d.execPK(d.ctx, j)) }()
 }
 
@@ -126,7 +157,7 @@ func (d *daemon) nextPKPair(now time.Time) (*IP, *IP) {
 	}
 	held := func(sb, inc *IP) bool { return now.Before(d.pkFailUntil[sb.Addr+">"+inc.Addr]) }
 	sb, inc := d.pool.pickPKPair(now, held)
-	if sb != nil && now.Sub(d.pkLastEval) < 30*time.Minute && !urgentPair(sb.medianRTT(), inc.medianRTT()) {
+	if sb != nil && now.Sub(d.pkLastEval) < 30*time.Minute && !urgentPair(sb.medianRTT(), pkRef(inc)) {
 		return nil, nil // not urgent: wait for the elective slot
 	}
 	return sb, inc
@@ -143,7 +174,7 @@ func (p *Pool) pkPairEligible(sb, inc *IP, now time.Time) bool {
 		now.Sub(sb.LastSeen) > 10*time.Minute || len(sb.okRTTs()) < 4 {
 		return false
 	}
-	med, reference := sb.medianRTT(), inc.medianRTT()
+	med, reference := sb.medianRTT(), pkRef(inc)
 	if med > reference-30 || med > 0.8*reference {
 		return false
 	}
@@ -155,7 +186,7 @@ func (p *Pool) pkPairEligible(sb, inc *IP, now time.Time) bool {
 // held, if not nil, skips pairs that lost a recent round.
 func (p *Pool) pickPKPair(now time.Time, held func(sb, inc *IP) bool) (challenger, incumbent *IP) {
 	for _, a := range p.actives() {
-		if usablePKIncumbent(a) && (incumbent == nil || a.medianRTT() > incumbent.medianRTT()) {
+		if usablePKIncumbent(a) && (incumbent == nil || pkRef(a) > pkRef(incumbent)) {
 			incumbent = a
 		}
 	}
@@ -174,8 +205,12 @@ func (p *Pool) pickPKPair(now time.Time, held func(sb, inc *IP) bool) (challenge
 // keeping every physical result.
 func (d *daemon) execPK(ctx context.Context, j job) jobResult {
 	cfg := d.cfg
-	res := jobResult{job: j, pk: &pkRun{}}
-	for i := 0; i < cfg.PromoteProbes; i++ {
+	n := cfg.PromoteProbes
+	if j.urgent {
+		n = urgentProbes
+	}
+	res := jobResult{job: j, pk: &pkRun{probes: n}}
+	for i := 0; i < n; i++ {
 		for _, leg := range []struct {
 			addr   string
 			dst    *[]float64
@@ -192,7 +227,7 @@ func (d *daemon) execPK(ctx context.Context, j job) jobResult {
 				*leg.colo = r.Colo
 			}
 		}
-		if i+1 < cfg.PromoteProbes {
+		if i+1 < n {
 			select {
 			case <-ctx.Done():
 				res.err = "cancelled"
@@ -244,12 +279,15 @@ func (d *daemon) applyPK(r jobResult, now time.Time) {
 		log.Printf("PK %s vs %s: no win (%s)", r.ip, r.peer, why)
 		return
 	}
-	if d.pkPending != nil && d.pkPending.Challenger == r.ip && d.pkPending.Incumbent == r.peer {
+	urgent := r.pk.urgent(d.cfg)
+	switch {
+	case urgent: // the paired gap is the evidence: no confirmation round
+	case d.pkPending != nil && d.pkPending.Challenger == r.ip && d.pkPending.Incumbent == r.peer:
 		if now.Sub(d.pkPending.At) < 5*time.Minute {
 			log.Printf("PK %s vs %s: win too early to confirm, keeping first-win age", r.ip, r.peer)
 			return
 		}
-	} else {
+	default:
 		d.pkPending = &pkPending{Challenger: r.ip, Incumbent: r.peer, At: now}
 		log.Printf("PK %s vs %s: first win (%s), awaiting confirmation", r.ip, r.peer, why)
 		return
@@ -260,7 +298,7 @@ func (d *daemon) applyPK(r jobResult, now time.Time) {
 	if d.pool.pk.Day != day {
 		d.pool.pk.Day, d.pool.pk.BWUsed = day, 0
 	}
-	if d.pool.pk.BWUsed >= 2 && !r.pk.urgent(d.cfg) {
+	if d.pool.pk.BWUsed >= 2 && !urgent {
 		log.Printf("PK %s confirmed (%s) but daily bandwidth budget spent; light observation continues", r.ip, why)
 		return
 	}

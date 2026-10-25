@@ -397,7 +397,7 @@ func TestDownloadsKeepSpeedGap(t *testing.T) {
 			a := sinActive(fmt.Sprintf("198.18.%d.1", i), 700)
 			d.pool.ips[a.Addr] = a
 		}
-		sb := freshStandby("198.18.9.1", "NRT", 270)
+		sb := freshStandby("198.18.9.1", "NRT", 500) // a better standby, but not urgent (< 1.5x)
 		d.pool.ips[sb.Addr] = sb
 		d.pool.speedNext = t0.Add(5 * time.Minute)
 		return d, sb
@@ -469,20 +469,20 @@ func TestFillSkipsGapWhenUnderHalf(t *testing.T) {
 	a := sinActive("198.18.0.1", 700)
 	d.pool.ips[a.Addr] = a // 1 of 3
 	d.pool.speedNext = t0.Add(5 * time.Minute)
-	if why := d.longJobBlocked(t0, true); why != "" {
+	if why := d.longJobBlocked(t0, gapFill); why != "" {
 		t.Fatalf("fill with 1 of 3 actives must not wait for the gap: %s", why)
 	}
-	if d.longJobBlocked(t0, false) == "" {
+	if d.longJobBlocked(t0, gapFull) == "" {
 		t.Fatal("other long jobs must still wait for the gap")
 	}
 	b := sinActive("198.18.1.1", 700)
 	d.pool.ips[b.Addr] = b // 2 of 3
-	if d.longJobBlocked(t0, true) == "" {
+	if d.longJobBlocked(t0, gapFill) == "" {
 		t.Fatal("fill with 2 of 3 actives must wait for the gap")
 	}
 	d.pool.ips = map[string]*IP{a.Addr: a}
 	d.pool.speedPaused = t0.Add(time.Hour)
-	if d.longJobBlocked(t0, true) == "" {
+	if d.longJobBlocked(t0, gapFill) == "" {
 		t.Fatal("the HTTP 429 pause must hold even for an urgent fill")
 	}
 }

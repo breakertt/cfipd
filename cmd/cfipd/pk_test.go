@@ -107,7 +107,7 @@ func TestPKPendingAgeNotResetByEarlyWin(t *testing.T) {
 	mk := func() jobResult {
 		r := jobResult{job: job{kind: jPK, ip: sb.Addr, peer: inc.Addr, gen: sb.Gen, peerGen: inc.Gen}, ok: true, pk: &pkRun{}}
 		for range 8 {
-			r.pk.challRTT = append(r.pk.challRTT, 150)
+			r.pk.challRTT = append(r.pk.challRTT, 300) // a win, but not urgent: it needs confirmation
 			r.pk.incRTT = append(r.pk.incRTT, 400)
 		}
 		r.pk.challOK, r.pk.incOK, r.pk.challColo, r.pk.incColo = 8, 8, "KIX", "HKG"
@@ -428,28 +428,86 @@ func TestPKSkipsHeldPair(t *testing.T) {
 	}
 }
 
-// In an urgent round the challenger may lose up to urgentExtraFails probes;
-// in an ordinary round it may not. Probe times are fixtures.
+// An urgent round has urgentProbes probes per side and passes with one lost
+// challenger probe; an ordinary round needs every probe. Probe times are
+// fixtures.
 func TestUrgentPKToleratesLoss(t *testing.T) {
-	run := func(chall, inc float64, challOK int) bool {
-		r := &pkRun{challOK: challOK, incOK: 8}
+	run := func(probes int, chall, inc float64, challOK int) bool {
+		r := &pkRun{probes: probes, challOK: challOK, incOK: probes}
 		for range challOK {
 			r.challRTT = append(r.challRTT, chall)
 		}
-		for range 8 {
+		for range probes {
 			r.incRTT = append(r.incRTT, inc)
 		}
 		ok, _ := r.pass(defaultConfig())
 		return ok
 	}
-	if !run(230, 776, 7) || !run(230, 776, 6) {
-		t.Error("230 ms with one or two lost probes must beat a 776 ms incumbent")
+	if !run(urgentProbes, 230, 776, urgentProbes) || !run(urgentProbes, 230, 776, urgentProbes-1) {
+		t.Error("an urgent round passes with all probes or one lost")
 	}
-	if run(230, 776, 5) {
-		t.Error("three lost probes are too many even in an urgent round")
+	if run(urgentProbes, 230, 776, urgentProbes-2) {
+		t.Error("two lost probes of four are too many")
 	}
-	if run(230, 300, 7) {
+	if run(8, 230, 300, 7) {
 		t.Error("an ordinary round still needs every challenger probe")
+	}
+}
+
+// The incumbent's reference is the slower of its window median and the median
+// of its latest successful probes, so a fresh slowdown counts at once.
+// Probe times are fixtures.
+func TestUrgentPKSeesFreshSlowdown(t *testing.T) {
+	d, inc, sb := pkPairFixture(t)
+	for i := range inc.Win {
+		inc.Win[i].RTT = 270 // eight fast samples...
+	}
+	for i := range 4 {
+		inc.Win[len(inc.Win)-1-i].RTT = 700 // ...then four slow ones
+	}
+	for i := range sb.Win {
+		sb.Win[i].RTT = 280
+	}
+	if got := pkRef(inc); got != 700 {
+		t.Fatalf("reference %v, want the recent 700 ms", got)
+	}
+	if s, i := d.pool.pickPKPair(t0, nil); s != sb || i != inc || !urgentPair(sb.medianRTT(), pkRef(inc)) {
+		t.Fatalf("a fresh 700 ms slowdown against a 280 ms standby must make an urgent pair, got %v vs %v", s, i)
+	}
+}
+
+// An urgent winner goes straight to the bandwidth stage, without the
+// confirmation round.
+func TestUrgentPKSkipsConfirmation(t *testing.T) {
+	d, inc, sb := pkPairFixture(t)
+	d.ctx = cancelledCtx()
+	r := &pkRun{probes: urgentProbes, challOK: urgentProbes, incOK: urgentProbes}
+	for range urgentProbes {
+		r.challRTT = append(r.challRTT, 150)
+		r.incRTT = append(r.incRTT, 400)
+	}
+	d.applyPK(jobResult{job: job{kind: jPK, ip: sb.Addr, peer: inc.Addr}, pk: r}, t0)
+	if !d.pkRunning || d.pkPending != nil {
+		t.Fatalf("an urgent first win must start the bandwidth stage, running=%v pending=%v", d.pkRunning, d.pkPending)
+	}
+}
+
+// An urgent PK needs only urgentGap since the last download; other long jobs
+// keep the full speed_gap, and the 429 pause holds for all.
+func TestUrgentGap(t *testing.T) {
+	d := testDaemon(t)
+	d.cfg.SpeedGap = Duration{15 * time.Minute}
+	d.pool.speedNext = t0.Add(10 * time.Minute) // last download 5 minutes ago
+	if d.longJobBlocked(t0, gapUrgent) != "" || d.longJobBlocked(t0, gapFull) == "" {
+		t.Error("5 minutes after a download, an urgent PK may start and an elective one may not")
+	}
+	d.pool.speedNext = t0.Add(14 * time.Minute) // 1 minute ago
+	if d.longJobBlocked(t0, gapUrgent) == "" {
+		t.Error("1 minute after a download, an urgent PK must wait")
+	}
+	d.pool.speedNext, d.pool.speedPaused = time.Time{}, t0.Add(time.Hour)
+	if d.longJobBlocked(t0, gapUrgent) == "" {
+		t.Error("the 429 pause holds for urgent PKs too")
 	}
 }
 

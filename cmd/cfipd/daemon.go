@@ -36,6 +36,7 @@ type job struct {
 	gen     uint64  // dispatch-time generation of ip
 	peerGen uint64  // dispatch-time generation of peer
 	relax   bool    // fill promotion under a relaxed per-colo cap
+	urgent  bool    // urgent PK: urgentProbes per side
 }
 
 type jobResult struct {
@@ -375,7 +376,7 @@ func (d *daemon) schedule(now time.Time) {
 	// Hard-failure fill has priority; PK may still improve a pool that fill
 	// cannot complete.
 	filling := false
-	if d.longJobBlocked(now, true) == "" && len(d.pool.actives()) < cfg.ActiveCount {
+	if d.longJobBlocked(now, gapFill) == "" && len(d.pool.actives()) < cfg.ActiveCount {
 		filling = d.fillActive(now)
 	}
 	if !filling {
@@ -393,7 +394,17 @@ func (d *daemon) schedule(now time.Time) {
 // HTTP 429 to stay under Cloudflare rate limits. A fill with fewer than half
 // of active_count left does not wait for the gap, since the relay is nearly
 // empty; the 429 pause holds for every job.
-func (d *daemon) longJobBlocked(now time.Time, fill bool) string {
+// gapRule is how much of speed_gap a long job may skip.
+type gapRule int
+
+const (
+	gapFull   gapRule = iota // every elective job
+	gapFill                  // fill and manual promote: no gap while fewer than half the actives remain
+	gapUrgent                // an urgent PK: urgentGap since the last download is enough
+)
+
+func (d *daemon) longJobBlocked(now time.Time, rule gapRule) string {
+	lastDownload := d.pool.speedNext.Add(-d.cfg.SpeedGap.Duration)
 	switch {
 	case d.promoting:
 		return "a promotion test is running"
@@ -403,7 +414,8 @@ func (d *daemon) longJobBlocked(now time.Time, fill bool) string {
 		return "a bandwidth recheck is running"
 	case now.Before(d.pool.speedPaused):
 		return "bandwidth downloads paused after HTTP 429 until " + d.pool.speedPaused.Format(time.RFC3339)
-	case now.Before(d.pool.speedNext) && !(fill && 2*len(d.pool.actives()) < d.cfg.ActiveCount):
+	case now.Before(d.pool.speedNext) && !(rule == gapFill && 2*len(d.pool.actives()) < d.cfg.ActiveCount) &&
+		!(rule == gapUrgent && !now.Before(lastDownload.Add(urgentGap))):
 		return "next bandwidth download allowed at " + d.pool.speedNext.Format(time.RFC3339)
 	}
 	return ""
