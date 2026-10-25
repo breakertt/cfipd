@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
@@ -144,7 +145,7 @@ func (d *daemon) handleCtl(req ctlRequest) {
 			"scan_every":   d.scanInterval().String(),
 			"promoting":    d.promoting,
 			"pk":           pk,
-			"probes_today": d.dayCounts,
+			"probes_today": maps.Clone(d.dayCounts), // encoded off the loop: never share its maps
 			"bytes_today":  d.pool.dayBytes,
 			"memory_mb":    map[string]any{"go_in_use": goMemoryInUse() >> 20, "limit": memoryLimitMB(), "low": d.lowMem},
 		}
@@ -160,9 +161,9 @@ func (d *daemon) handleCtl(req ctlRequest) {
 		}
 		rep.v = views(d.cfg, cands, now)
 	case "/prefixes":
-		stats := make([]*PrefixStat, 0, len(d.scan.stats))
+		stats := make([]PrefixStat, 0, len(d.scan.stats)) // copies: encoded off the loop
 		for _, st := range d.scan.stats {
-			stats = append(stats, st)
+			stats = append(stats, *st)
 		}
 		sort.Slice(stats, func(i, j int) bool { return stats[i].Probes > stats[j].Probes })
 		if len(stats) > 50 {
