@@ -21,12 +21,17 @@
   .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); }
   .dot { display:inline-block; width:.55rem; height:.55rem; border-radius:50%; background:currentColor; flex:none; }
 
-  header { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem 1.1rem; }
-  h1 { font:600 1.2rem var(--mono); letter-spacing:.02em; }
+  /* one row everywhere; phones drop the update time, which the badge shows on hover */
+  header { display:flex; align-items:center; gap:.9rem; }
+  h1 { font:600 1.2rem var(--mono); letter-spacing:.02em; flex:none; }
+  .status { flex:1; min-width:0; display:flex; align-items:center; gap:.7rem; white-space:nowrap; overflow:hidden; }
+  #updated { font-size:.75rem; color:var(--muted); }
+  #updated:not(:empty)::before { content:'·'; margin-right:.7rem; }
+  @media (max-width:640px) { #updated { display:none; } header { gap:.6rem; } }
   #badge { display:inline-flex; align-items:center; gap:.45em; font-size:.85rem; color:var(--muted); }
   #badge.ok { color:var(--ok); } #badge.warn { color:var(--warn); } #badge.bad { color:var(--bad); }
-  nav { display:flex; align-items:center; gap:.4rem; margin-left:auto; }
-  #updated { font:.72rem var(--mono); color:var(--muted); margin-right:.3rem; }
+  nav { display:flex; align-items:center; gap:.4rem; flex:none; }
+  #refresh { font-size:.95rem; line-height:1; padding:.25em .6em; }
   nav button, button.more { font:.76rem var(--mono); color:var(--muted); background:var(--panel); border:1px solid var(--line);
     border-radius:99px; padding:.3em .95em; cursor:pointer; }
   button.more { margin-top:.6rem; }
@@ -81,7 +86,7 @@
   .delta { font-size:.75rem; margin-left:.35rem; }
   @media (max-width:640px) { th, td { padding:.5rem .55rem; } .opt { display:none; } }
 
-  .ov { padding:1rem 1.1rem .95rem; }
+  .ov { margin-top:1.4rem; } /* the summary sits on the page, not in a card */
   .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(112px,1fr)); gap:1rem 1.2rem; }
   .kpi .k { font:600 .6rem var(--mono); letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
   .kpi .v { font-size:1.15rem; font-weight:600; line-height:1.2; margin-top:.3rem; font-variant-numeric:tabular-nums; white-space:nowrap; }
@@ -105,17 +110,15 @@
 <main>
 <header>
   <h1>cfipd</h1>
-  <span id="badge"></span>
+  <div class="status"><span id="badge"></span><span id="updated"></span></div>
   <nav>
-    <span id="updated"></span>
     <button id="lang" title="Language / 语言">中文</button>
-    <button id="refresh" data-i18n="refresh">Refresh</button>
+    <button id="refresh">↻</button>
   </nav>
 </header>
 <div id="err"></div>
 
-<h2><span data-i18n="h_overview">Overview</span></h2>
-<div class="card ov" id="overview"></div>
+<div class="ov" id="overview"></div>
 
 <h2><span data-i18n="h_active">Active</span><small data-i18n="sub_active"></small></h2>
 <div class="cards" id="actives"></div>
@@ -144,7 +147,7 @@ let allConns = false; // show every closed connection, not only the latest 20
 const I18N = {
   en: {
     title: 'cfipd dashboard', refresh: 'Refresh',
-    h_overview: 'Overview', h_active: 'Active', sub_active: 'entry points that serve relay traffic now',
+    h_active: 'Active', sub_active: 'entry points that serve relay traffic now',
     h_clients: 'Clients', sub_clients: 'relay users since start, last seen first',
     h_conns: 'Connections', sub_conns: 'open first, then the latest closed',
     th_conn: 'SNI · client', show_all: n => `Show all ${n} closed`, fewer: 'Show fewer', th_upstream: 'Upstream', th_started: 'Started', th_duration: 'Duration', th_state: 'State',
@@ -169,7 +172,7 @@ const I18N = {
   },
   zh: {
     title: 'cfipd 仪表盘', refresh: '刷新',
-    h_overview: '概览', h_active: 'Active', sub_active: '当前承载 relay 流量的入口',
+    h_active: 'Active', sub_active: '当前承载 relay 流量的入口',
     h_clients: '客户端', sub_clients: '自启动以来使用 relay 的客户端，最近的在前',
     h_conns: '连接', sub_conns: '进行中的在前，其后是最近结束的',
     th_conn: 'SNI · 客户端', show_all: n => `显示全部 ${n} 条已结束`, fewer: '收起', th_upstream: '上游', th_started: '开始', th_duration: '时长', th_state: '状态',
@@ -337,7 +340,11 @@ function render(status, standbys, relay, clients, conns) {
 
 }
 
-function showUpdated() { $('updated').textContent = lastOK ? t('updated')(Math.round((Date.now() - lastOK) / 1000)) : ''; }
+function showUpdated() {
+  const text = lastOK ? t('updated')(Math.round((Date.now() - lastOK) / 1000)) : '';
+  $('updated').textContent = text;
+  $('badge').title = text;
+}
 function showErr() {
   const el = $('err');
   if (!lastErr) { el.style.display = 'none'; return; }
@@ -350,6 +357,8 @@ function applyLang() {
   document.title = t('title');
   document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
   $('lang').textContent = lang === 'zh' ? 'EN' : '中文';
+  $('refresh').title = t('refresh');
+  $('refresh').setAttribute('aria-label', t('refresh'));
   setBadge(); showUpdated(); showErr();
   if (lastData) render(...lastData);
 }
