@@ -131,7 +131,7 @@ systemd 服务传入 `-config /etc/cfipd.json`，所以 `CFIPD_CONFIG_PATH` 不�
 | `scan_v6_ratio` | 新地址发现中分配给 IPv6 的比例 | `0.2` |
 | `promote_min_mbps` | 转正所需的最低吞吐量 | `30` |
 | `bandwidth_weight` | 分数中带宽相对探测耗时的权重，`0` 只看探测耗时，`1` 只看带宽 | `0.4` |
-| `speed_recheck` | 每个 Active 带宽复测的间隔；`"0s"` 关闭复测 | `"12h"` |
+| `speed_recheck` | 每个 Active 带宽复测的间隔；`"0s"` 关闭复测 | `"1h"` |
 | `speed_gap` | 两次带宽测试开始时间之间的最短间隔；遇到 HTTP 429 至少暂停一小时 | `"15m"` |
 | `memory_limit_mb` | daemon 的内存上限（MiB）；`0` 为自动，见「数据与运行限制」 | `0` |
 
@@ -214,7 +214,9 @@ PK 最多每 30 分钟发起一对新的比较。现役入口的探测耗时达�
 w，快 20% 的挑战者带宽要有现役入口的约 72%。relay 权重里，探测耗时超过最好 Active 1.3 倍
 的 Active 只保留四分之一权重。
 
-每个 Active 约每 12 小时重新测一次带宽（`speed_recheck`），带随机抖动。第一次低于
+每个 Active 约每小时重新测一次带宽（`speed_recheck`），带随机抖动。下载之间至少间隔
+`speed_gap`，所以各 Active 轮流测：三个 Active 时约每 20 分钟测一个。每次下载约 95MB，
+三个 Active 每天约用 7GB 流量；想省流量就把 `speed_recheck` 调长。第一次低于
 30Mbps 时，约一小时后再测一次确认；连续两次低于 30Mbps，且另有 Active 测得至少 30Mbps
 时，该 Active 继续服务，但 relay 权重降为四分之一。此后每次低于下限的结果，都给排名最高
 且符合分散约束的后备一次完整转正测试，通过后两者对换角色。另有 Active 达到 30Mbps 时，

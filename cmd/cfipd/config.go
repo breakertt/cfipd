@@ -145,7 +145,7 @@ func defaultConfig() *Config {
 		BandwidthWeight:  0.4,
 		SpeedBytes:       99_999_999,
 		SpeedTimeout:     Duration{10 * time.Second},
-		SpeedRecheck:     Duration{12 * time.Hour},
+		SpeedRecheck:     Duration{time.Hour}, // three actives: one recheck every ~20 min under the 15 min speed_gap
 		SpeedGap:         Duration{15 * time.Minute},
 
 		MaxActivePerPrefix: 1,

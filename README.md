@@ -144,7 +144,7 @@ It logs every problem that `cfipd test` reports.
 | `scan_v6_ratio` | Share of new-address discovery assigned to IPv6 | `0.2` |
 | `promote_min_mbps` | Minimum throughput required for promotion | `30` |
 | `bandwidth_weight` | Weight of bandwidth against probe time in the score, from `0` (probe time only) to `1` (bandwidth only) | `0.4` |
-| `speed_recheck` | Interval between bandwidth rechecks of each active; `"0s"` disables them | `"12h"` |
+| `speed_recheck` | Interval between bandwidth rechecks of each active; `"0s"` disables them | `"1h"` |
 | `speed_gap` | Minimum time between the starts of bandwidth tests; an HTTP 429 answer pauses tests for at least an hour | `"15m"` |
 | `memory_limit_mb` | Memory cap of the daemon in MiB; `0` is automatic (see "Data and operational limits") | `0` |
 
@@ -253,8 +253,11 @@ score never trades probe time away. With the default w, a challenger that is 20%
 faster needs about 72% of the incumbent's bandwidth. In the relay weights, an active over 1.3
 times the probe time of the best active keeps a quarter of its weight.
 
-Each active gets a new bandwidth measurement about every 12 hours
-(`speed_recheck`), with random jitter. A first result under 30 Mbps starts a
+Each active gets a new bandwidth measurement about every hour (`speed_recheck`),
+with random jitter. The actives take turns, because downloads stay at least
+`speed_gap` apart: with three actives, one recheck runs about every 20 minutes.
+Each download is about 95 MB, so three actives use about 7 GB a day. Set a longer
+`speed_recheck` to use less. A first result under 30 Mbps starts a
 confirmation measurement about an hour later. After two such results in a row,
 and while another active measures at least 30 Mbps, the active continues to
 serve with a quarter of its normal relay weight. Each low result from then on
